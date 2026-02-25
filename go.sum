@@ -2,3 +2,5 @@ code.hybscloud.com/iox v0.3.3 h1:NTKW7ZM+e2x3Bd3O14nRKuFoVma0/Nix7LerofNUZ1k=
 code.hybscloud.com/iox v0.3.3/go.mod h1:LNxkaP3I0NWbnV2ia5zye8VMrk9kRCGbeIRZR2eGePA=
 code.hybscloud.com/kont v0.1.3 h1:NCl5B4WjIi56umybyXOglkmsGNgHtSM8MWi/Fh33EU8=
 code.hybscloud.com/kont v0.1.3/go.mod h1:bSVvA1+WqivYN585w48d+f2q9zkYDJcdHQYywWFL9D4=
+code.hybscloud.com/spin v0.1.5 h1:Xxi9mIMFmEl9JbCG8SEUnyfuNMT+6xdPu4twq8EqYK4=
+code.hybscloud.com/spin v0.1.5/go.mod h1:BSOZ7kI43eIPohSVPQXZRf/KJYtRW3gJx82CwyLM64g=
