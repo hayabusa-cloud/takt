@@ -99,6 +99,14 @@ if susp != nil {
 Un `Loop` impulsa computaciones a traves de un `Backend`. Envia operaciones, sondea completaciones, las correlaciona por `Token` y reanuda las continuaciones suspendidas.
 `maxCompletions` en `NewLoop` debe ser mayor que 0.
 
+`Backend.Poll([]Completion) (int, error)` informa tanto el numero de completaciones listas como cualquier fallo de
+sondeo de infraestructura. `Loop` trata `iox.ErrWouldBlock` devuelto por `Poll` como un ciclo inactivo y no como un
+error terminal.
+
+Cuando una completacion lleva `iox.ErrWouldBlock`, el bucle reenvia la misma operacion bajo un ciclo de vida de
+suspension afin. Si una completacion `iox.ErrMore` (multishot) reanudaria en un nuevo efecto suspendido, `Poll` / `Run`
+retornan `ErrUnsupportedMultishot`.
+
 ```go
 loop := takt.NewLoop[*myBackend, int](backend, 64)
 
@@ -142,6 +150,7 @@ results, err := loop.Run()
 - `(*Loop[B, R]).Poll() ([]R, error)` — poll and dispatch completions
 - `(*Loop[B, R]).Run() ([]R, error)` — drive all to completion
 - `(*Loop[B, R]).Pending() int` — count pending operations
+- `ErrUnsupportedMultishot` — multishot completion cannot suspend on a new effect
 
 ### Puente
 

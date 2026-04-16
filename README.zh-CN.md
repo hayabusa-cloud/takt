@@ -99,6 +99,12 @@ if susp != nil {
 `Loop` 通过 `Backend` 驱动计算。它提交操作、轮询完成事件、通过 `Token` 关联并恢复挂起的续延。
 `NewLoop` 的 `maxCompletions` 必须大于 0。
 
+`Backend.Poll([]Completion) (int, error)` 同时报告就绪完成事件数量和基础设施轮询失败。`Loop` 将 `Poll` 返回的
+`iox.ErrWouldBlock` 视为空闲轮询，而不是终止性错误。
+
+当完成事件携带 `iox.ErrWouldBlock` 时，循环会在仿射暂停生命周期下重新提交同一操作。如果 `iox.ErrMore`
+（多次触发）完成事件将恢复到一个新的挂起效果，`Poll` / `Run` 返回 `ErrUnsupportedMultishot`。
+
 ```go
 loop := takt.NewLoop[*myBackend, int](backend, 64)
 
@@ -142,6 +148,7 @@ results, err := loop.Run()
 - `(*Loop[B, R]).Poll() ([]R, error)` — poll and dispatch completions
 - `(*Loop[B, R]).Run() ([]R, error)` — drive all to completion
 - `(*Loop[B, R]).Pending() int` — count pending operations
+- `ErrUnsupportedMultishot` — multishot completion cannot suspend on a new effect
 
 ### 桥接
 
