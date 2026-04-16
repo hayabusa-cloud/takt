@@ -99,6 +99,13 @@ if susp != nil {
 `Loop` は `Backend` を通じて計算を駆動します。操作を送信し、完了をポーリングし、`Token` で関連付け、中断された継続を再開します。
 `NewLoop` の `maxCompletions` は 0 より大きい必要があります。
 
+`Backend.Poll([]Completion) (int, error)` は、準備済み完了件数とインフラストラクチャのポーリング失敗の両方を報告します。
+`Loop` は `Poll` から返る `iox.ErrWouldBlock` を終端エラーではなくアイドルティックとして扱います。
+
+完了が `iox.ErrWouldBlock` を伴う場合、ループはアフィンサスペンションライフサイクルの下で同じ操作を再送信します。
+`iox.ErrMore`（マルチショット）完了が新しいサスペンドされたエフェクトに再開しようとする場合、`Poll` / `Run` は
+`ErrUnsupportedMultishot` を返します。
+
 ```go
 loop := takt.NewLoop[*myBackend, int](backend, 64)
 
@@ -142,6 +149,7 @@ results, err := loop.Run()
 - `(*Loop[B, R]).Poll() ([]R, error)` — poll and dispatch completions
 - `(*Loop[B, R]).Run() ([]R, error)` — drive all to completion
 - `(*Loop[B, R]).Pending() int` — count pending operations
+- `ErrUnsupportedMultishot` — multishot completion cannot suspend on a new effect
 
 ### ブリッジ
 

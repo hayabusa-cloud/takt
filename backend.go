@@ -23,6 +23,7 @@ type Backend[B Backend[B]] interface {
 	// Submit sends an operation. Returns a correlation token.
 	Submit(op kont.Operation) (Token, error)
 
-	// Poll writes ready completions into completions. Returns count.
-	Poll(completions []Completion) int
+	// Poll writes ready completions into completions and reports any
+	// infrastructure wait failure.
+	Poll(completions []Completion) (int, error)
 }

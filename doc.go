@@ -21,6 +21,13 @@
 //   - [code.hybscloud.com/iox.ErrWouldBlock]: no progress, retry later
 //   - failure: infrastructure error
 //
+// Event-loop backends surface infrastructure poll failures directly from
+// [Backend.Poll], while [Loop.Poll] / [Loop.Run] still treat
+// [code.hybscloud.com/iox.ErrWouldBlock] as idle. [Loop.Poll] / [Loop.Run]
+// return [ErrUnsupportedMultishot] when an
+// [code.hybscloud.com/iox.ErrMore] completion would otherwise resume into a new
+// suspended effect that has no backend submission of its own.
+//
 // # Error Handling
 //
 // [ExecError]/[ExecErrorExpr]/[StepError]/[AdvanceError] compose Dispatcher
