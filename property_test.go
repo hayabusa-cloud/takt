@@ -32,9 +32,9 @@ func (b *propBackend) Submit(op kont.Operation) (takt.Token, error) {
 	return t, nil
 }
 
-func (b *propBackend) Poll(completions []takt.Completion) int {
+func (b *propBackend) Poll(completions []takt.Completion) (int, error) {
 	if len(b.pending) == 0 {
-		return 0
+		return 0, nil
 	}
 	if b.shuffle {
 		rand.Shuffle(len(b.pending), func(i, j int) {
@@ -43,7 +43,7 @@ func (b *propBackend) Poll(completions []takt.Completion) int {
 	}
 	n := copy(completions, b.pending)
 	b.pending = b.pending[n:]
-	return n
+	return n, nil
 }
 
 type propOp struct{ kont.Phantom[int] }
@@ -67,7 +67,7 @@ func TestPropertyFairnessOrdering(t *testing.T) {
 		backend := &propBackend{nextT: 1, shuffle: true}
 		loop := takt.NewLoop[*propBackend, int](backend, count)
 
-		for i := 0; i < count; i++ {
+		for range count {
 			loop.SubmitExpr(propCont())
 		}
 
@@ -78,7 +78,7 @@ func TestPropertyFairnessOrdering(t *testing.T) {
 		}
 
 		sort.Ints(results)
-		for i := 0; i < count; i++ {
+		for i := range count {
 			if results[i] != i+1 {
 				return false
 			}
@@ -114,7 +114,7 @@ func TestPropertyFaultTolerance(t *testing.T) {
 		loop := takt.NewLoop[*propBackend, int](backend, count)
 
 		successCount := 0
-		for i := 0; i < count; i++ {
+		for i := range count {
 			if i == failIdx {
 				backend.failSubmit = true
 			} else {

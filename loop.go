@@ -5,16 +5,19 @@
 package takt
 
 import (
+	"sync/atomic"
+	"unsafe"
+
+	"code.hybscloud.com/iobuf"
 	"code.hybscloud.com/iox"
 	"code.hybscloud.com/kont"
 	"code.hybscloud.com/spin"
-	"sync/atomic"
-	"unsafe"
 )
 
-const pendingShards = 64
-
-const cacheLineBytes = 64
+const (
+	pendingShards  = 64
+	cacheLineBytes = iobuf.CacheLineSize
+)
 
 type pendingShard[R any] struct {
 	sl    spin.Lock
@@ -27,7 +30,7 @@ type shardedPending[R any] [pendingShards]pendingShard[R]
 
 func newShardedPending[R any]() *shardedPending[R] {
 	var sp shardedPending[R]
-	for i := 0; i < pendingShards; i++ {
+	for i := range pendingShards {
 		sp[i] = pendingShard[R]{
 			items: make(map[Token]*kont.Suspension[R]),
 		}
@@ -45,29 +48,23 @@ func (sp *shardedPending[R]) put(tok Token, susp *kont.Suspension[R]) {
 	shard.sl.Unlock()
 }
 
-func (sp *shardedPending[R]) get(tok Token) (*kont.Suspension[R], bool) {
+func (sp *shardedPending[R]) take(tok Token) (*kont.Suspension[R], bool) {
 	shard := &sp[tok%pendingShards]
 	shard.sl.Lock()
 	susp, ok := shard.items[tok]
-	shard.sl.Unlock()
-	return susp, ok
-}
-
-func (sp *shardedPending[R]) delete(tok Token) {
-	shard := &sp[tok%pendingShards]
-	shard.sl.Lock()
-	if _, ok := shard.items[tok]; ok {
+	if ok {
 		delete(shard.items, tok)
 		shard.sl.Unlock()
 		shard.size.Add(-1)
-		return
+		return susp, true
 	}
 	shard.sl.Unlock()
+	return nil, false
 }
 
 func (sp *shardedPending[R]) count() int {
 	var n int
-	for i := 0; i < pendingShards; i++ {
+	for i := range pendingShards {
 		n += int(sp[i].size.Load())
 	}
 	return n
@@ -114,27 +111,52 @@ func (l *Loop[B, R]) Submit(m kont.Eff[R]) (R, bool, error) {
 }
 
 // Poll dispatches ready completions. Resumed suspensions are resubmitted.
+// Returns [ErrUnsupportedMultishot] if a multishot completion would otherwise
+// retarget a token to a new unsubmitted effect.
 func (l *Loop[B, R]) Poll() ([]R, error) {
-	n := l.backend.Poll(l.completions)
+	results, err, _ := l.poll()
+	return results, err
+}
+
+func (l *Loop[B, R]) poll() ([]R, error, bool) {
+	var (
+		n        int
+		pollErr  error
+		progress bool
+	)
+	n, pollErr = l.backend.Poll(l.completions)
 	l.results = l.results[:0]
-	for i := 0; i < n; i++ {
+	for i := range n {
 		c := l.completions[i]
-		susp, ok := l.pending.get(c.Token)
+		susp, ok := l.pending.take(c.Token)
 		if !ok {
 			continue
 		}
+		if iox.IsWouldBlock(c.Err) {
+			tok, err := l.backend.Submit(susp.Op())
+			if err != nil {
+				// Backend ownership ended with the completion token; a failed re-arm
+				// must explicitly discard the affine suspension before returning.
+				susp.Discard()
+				return l.results, err, progress
+			}
+			l.pending.put(tok, susp)
+			continue
+		}
+		progress = true
 
 		if iox.IsMore(c.Err) {
 			// Multishot: keep token alive.
 			result, next := susp.Resume(c.Value)
 			if next == nil {
-				l.pending.delete(c.Token)
 				l.results = append(l.results, result)
+			} else {
+				next.Discard()
+				return l.results, ErrUnsupportedMultishot, true
 			}
 			continue
 		}
 		// OK or failure: resume, delete token.
-		l.pending.delete(c.Token)
 		result, next := susp.Resume(c.Value)
 		if next == nil {
 			l.results = append(l.results, result)
@@ -142,12 +164,15 @@ func (l *Loop[B, R]) Poll() ([]R, error) {
 			tok, err := l.backend.Submit(next.Op())
 			if err != nil {
 				next.Discard()
-				return l.results, err
+				return l.results, err, progress
 			}
 			l.pending.put(tok, next)
 		}
 	}
-	return l.results, nil
+	if iox.IsWouldBlock(pollErr) {
+		pollErr = nil
+	}
+	return l.results, pollErr, progress
 }
 
 // Pending returns the count of in-flight operations.
@@ -157,21 +182,26 @@ func (l *Loop[B, R]) Pending() int {
 
 // Run polls until all pending operations complete.
 func (l *Loop[B, R]) Run() ([]R, error) {
-	var all []R
+	pending := l.Pending()
+	if pending == 0 {
+		return nil, nil
+	}
+	all := make([]R, 0, pending)
 	var bo iox.Backoff
-	for l.Pending() > 0 {
-		results, err := l.Poll()
+	for pending > 0 {
+		results, err, progress := l.poll()
 		if len(results) > 0 {
 			all = append(all, results...)
 		}
 		if err != nil {
 			return all, err
 		}
-		if len(results) > 0 {
+		if progress {
 			bo.Reset()
-			continue
+		} else {
+			bo.Wait()
 		}
-		bo.Wait()
+		pending = l.Pending()
 	}
 	return all, nil
 }
