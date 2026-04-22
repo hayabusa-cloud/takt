@@ -9,16 +9,16 @@ import (
 	"code.hybscloud.com/kont"
 )
 
-// dispatcherErrorHandler handles Error and Dispatcher effects.
-// Dispatch order: Error → Dispatcher. Value type for stack allocation.
+// dispatcherErrorHandler handles Error and Dispatcher operations.
+// Error operations run before dispatcher operations. Value type for stack allocation.
 type dispatcherErrorHandler[D Dispatcher[D], E, A any] struct {
 	d      D
 	errCtx *kont.ErrorContext[E]
 }
 
-// Dispatch implements kont.Handler. Error ops first, then Dispatcher.
+// Dispatch implements kont.Handler. Error operations run first.
 func (h dispatcherErrorHandler[D, E, A]) Dispatch(op kont.Operation) (kont.Resumed, bool) {
-	// Error ops: eager dispatch
+	// Error operations are handled eagerly.
 	if eop, ok := op.(interface {
 		DispatchError(ctx *kont.ErrorContext[E]) (kont.Resumed, bool)
 	}); ok {
@@ -28,12 +28,12 @@ func (h dispatcherErrorHandler[D, E, A]) Dispatch(op kont.Operation) (kont.Resum
 		}
 		return v, true
 	}
-	// Dispatcher ops: wait with full iox classification
+	// Non-error operations go through the dispatcher and wait as needed.
 	return dispatchWait(h.d, op), true
 }
 
-// ExecError runs a Cont-world computation with error handling.
-// Returns Right on success, Left on Throw.
+// ExecError runs a [kont.Eff] computation with error handling.
+// It returns Right on success and Left on Throw.
 func ExecError[E any, D Dispatcher[D], R any](d D, m kont.Eff[R]) kont.Either[E, R] {
 	wrapped := kont.Map[kont.Resumed, R, kont.Either[E, R]](m, func(r R) kont.Either[E, R] {
 		return kont.Right[E, R](r)
@@ -43,8 +43,8 @@ func ExecError[E any, D Dispatcher[D], R any](d D, m kont.Eff[R]) kont.Either[E,
 	return kont.Handle(wrapped, h)
 }
 
-// ExecErrorExpr is the Expr-world ExecError.
-// Blocks on iox.ErrWouldBlock via adaptive backoff (iox.Backoff).
+// ExecErrorExpr is the [kont.Expr] form of [ExecError].
+// It waits on [iox.ErrWouldBlock] via adaptive backoff.
 func ExecErrorExpr[E any, D Dispatcher[D], R any](d D, m kont.Expr[R]) kont.Either[E, R] {
 	wrapped := wrapRight[E, R](m)
 	var ctx kont.ErrorContext[E]
@@ -56,7 +56,7 @@ func rightUnwind[E, R any](_, _, _, current kont.Erased) (kont.Erased, kont.Fram
 	return kont.Erased(kont.Right[E, R](current.(R))), kont.ReturnFrame{}
 }
 
-// wrapRight wraps a protocol Expr[R] into Expr[Either[E, R]] using a pooled UnwindFrame.
+// wrapRight converts an Expr[R] into Expr[Either[E, R]] using a pooled UnwindFrame.
 func wrapRight[E, R any](protocol kont.Expr[R]) kont.Expr[kont.Either[E, R]] {
 	if _, ok := protocol.Frame.(kont.ReturnFrame); ok {
 		return kont.ExprReturn(kont.Right[E, R](protocol.Value))
@@ -67,15 +67,16 @@ func wrapRight[E, R any](protocol kont.Expr[R]) kont.Expr[kont.Either[E, R]] {
 }
 
 // StepError evaluates a computation with error support until the first suspension.
-// Returns (Either[E, R], nil) on completion or error, or (zero, suspension) if pending.
+// It returns (Either[E, R], nil) on completion or error, or (zero, suspension) if pending.
 func StepError[E, R any](m kont.Expr[R]) (kont.Either[E, R], *kont.Suspension[kont.Either[E, R]]) {
 	return kont.StepExpr(wrapRight[E, R](m))
 }
 
 // AdvanceError dispatches the suspended operation.
-// Error ops: eager (Throw → Discard + Left). Dispatcher ops: full iox classification.
+// Throw discards the suspension and returns Left; other operations go through
+// the dispatcher with the usual `iox` classification.
 func AdvanceError[E any, D Dispatcher[D], R any](d D, susp *kont.Suspension[kont.Either[E, R]]) (kont.Either[E, R], *kont.Suspension[kont.Either[E, R]], error) {
-	// Error ops: eager dispatch
+	// Error operations are handled eagerly.
 	if eop, ok := susp.Op().(interface {
 		DispatchError(ctx *kont.ErrorContext[E]) (kont.Resumed, bool)
 	}); ok {
@@ -88,7 +89,7 @@ func AdvanceError[E any, D Dispatcher[D], R any](d D, susp *kont.Suspension[kont
 		result, next := susp.Resume(v)
 		return result, next, nil
 	}
-	// Dispatcher ops: full iox classification
+	// Other operations go through the dispatcher.
 	v, err := d.Dispatch(susp.Op())
 	if iox.IsProgress(err) {
 		result, next := susp.Resume(v)
