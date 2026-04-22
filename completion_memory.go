@@ -56,10 +56,11 @@ func (f completionBufOptionFunc) applyCompletionBuf(c *completionBufConfig) { f(
 
 // WithSize requests an explicit completion-slab length. Providers may round
 // up to an internal storage boundary; the returned slice still satisfies
-// `len >= n`. Panics if n < 0.
+// `len >= n`. Panics if n <= 0; omit [WithSize] to request the provider's
+// default slab length.
 func WithSize(n int) CompletionBufOption {
-	if n < 0 {
-		panic("takt: WithSize requires n >= 0")
+	if n <= 0 {
+		panic("takt: WithSize requires n > 0")
 	}
 	return completionBufOptionFunc(func(c *completionBufConfig) { c.size = n })
 }
@@ -84,12 +85,16 @@ const completionSize = unsafe.Sizeof(Completion{})
 // ([iobuf.BufferSizeLarge], 128 KiB).
 const DefaultCompletionBufBytes = iobuf.BufferSizeLarge
 
+const defaultCompletionBufSize = DefaultCompletionBufBytes / int(completionSize)
+
+type defaultCompletionSlab [defaultCompletionBufSize]Completion
+
 // DefaultCompletionBufSize is the number of [Completion] entries that fit in
 // one [DefaultCompletionBufBytes] block. This is the slab length [HeapMemory]
 // returns from [HeapMemory.CompletionBuf] when no [WithSize] option is
 // supplied, and the implicit [NewLoop] choice when [WithMaxCompletions] is
 // not given.
-var DefaultCompletionBufSize = DefaultCompletionBufBytes / int(completionSize)
+var DefaultCompletionBufSize = defaultCompletionBufSize
 
 // HeapMemory is the default [CompletionMemory]: a [sync.Pool]-backed cache of
 // default-sized typed [Completion] slabs. Slabs of non-default length bypass
@@ -112,11 +117,12 @@ func (h *HeapMemory) CompletionBuf(opts ...CompletionBufOption) []Completion {
 	cfg := resolveCompletionBufConfig(opts, DefaultCompletionBufSize)
 	if cfg.size == DefaultCompletionBufSize {
 		if v := h.pool.Get(); v != nil {
-			p := v.(*[]Completion)
-			s := (*p)[:cfg.size]
+			slab := v.(*defaultCompletionSlab)
+			s := slab[:cfg.size]
 			clearCompletions(s)
 			return s
 		}
+		return new(defaultCompletionSlab)[:cfg.size]
 	}
 	return make([]Completion, cfg.size)
 }
@@ -128,7 +134,8 @@ func (h *HeapMemory) Release(buf []Completion) {
 		return
 	}
 	full := buf[:cap(buf)]
-	h.pool.Put(&full)
+	clearCompletions(full)
+	h.pool.Put((*defaultCompletionSlab)(unsafe.Pointer(unsafe.SliceData(full))))
 }
 
 // BoundedMemory is an `iobuf`-backed [CompletionMemory] provider for steady-state

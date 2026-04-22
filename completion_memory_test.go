@@ -256,13 +256,17 @@ func TestNewLoopWithBoundedMemoryEndToEnd(t *testing.T) {
 	l.Drain()
 }
 
-func TestWithSizeRejectsNegative(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected panic")
-		}
-	}()
-	_ = takt.WithSize(-1)
+func TestWithSizeRejectsNonPositive(t *testing.T) {
+	for _, n := range []int{0, -1} {
+		func(n int) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Fatalf("WithSize(%d): expected panic", n)
+				}
+			}()
+			_ = takt.WithSize(n)
+		}(n)
+	}
 }
 
 func TestWithMaxCompletionsRejectsNonPositive(t *testing.T) {

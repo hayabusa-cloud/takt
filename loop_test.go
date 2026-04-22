@@ -144,6 +144,9 @@ func TestPollWouldBlockIsIdle(t *testing.T) {
 	if len(results) != 0 {
 		t.Fatalf("got %d results, want 0", len(results))
 	}
+	if results != nil {
+		t.Fatalf("idle Poll results = %#v, want nil", results)
+	}
 	if l.Pending() != 1 {
 		t.Fatalf("pending %d, want 1", l.Pending())
 	}

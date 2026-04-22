@@ -196,10 +196,12 @@ func (l *Loop[B, R]) submit(susp *kont.Suspension[R]) error {
 // multishot completion (`iox.ErrMore`) that resumes into a new suspended
 // operation; Poll reports [ErrUnsupportedMultishot] for that case.
 //
-// Returns (results, nil) if progress is made, (nil, nil) if idle, or (nil, err)
-// if an infrastructure failure occurs. Poll never returns both results and a
-// non-nil error; if a fatal failure arrives in the same tick as ready results,
-// the failure is reported on the next call.
+// Returns completed results when one or more computations finish in the current
+// poll tick, a zero-length non-nil slice when work advanced without producing a
+// completed computation, (nil, nil) when idle, or (nil, err) on infrastructure
+// failure. Poll never returns both results and a non-nil error; if a fatal
+// failure arrives in the same tick as ready results, the failure is reported on
+// the next call.
 //
 // The returned []R aliases an internal buffer that is reused across Poll/Run
 // calls; callers that need to retain the slice past the next Poll/Run must
@@ -225,6 +227,9 @@ func (l *Loop[B, R]) step() ([]R, error, bool) {
 	)
 	n, pollErr = l.backend.Poll(l.completions)
 	l.results = l.results[:0]
+	if n > 0 {
+		defer clearCompletions(l.completions[:n])
+	}
 
 	if pollErr != nil {
 		if iox.IsWouldBlock(pollErr) {
@@ -250,6 +255,9 @@ func (l *Loop[B, R]) step() ([]R, error, bool) {
 		if ready.done {
 			l.results = append(l.results, ready.result)
 		}
+	}
+	if len(l.results) == 0 && !progress {
+		return nil, nil, false
 	}
 	return l.results, nil, progress
 }
