@@ -94,7 +94,7 @@ type defaultCompletionSlab [defaultCompletionBufSize]Completion
 // returns from [HeapMemory.CompletionBuf] when no [WithSize] option is
 // supplied, and the implicit [NewLoop] choice when [WithMaxCompletions] is
 // not given.
-var DefaultCompletionBufSize = defaultCompletionBufSize
+const DefaultCompletionBufSize = defaultCompletionBufSize
 
 // HeapMemory is the default [CompletionMemory]: a [sync.Pool]-backed cache of
 // default-sized typed [Completion] slabs. Slabs of non-default length bypass

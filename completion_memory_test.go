@@ -14,6 +14,8 @@ import (
 	"code.hybscloud.com/takt"
 )
 
+var _ [takt.DefaultCompletionBufSize]struct{}
+
 func TestDefaultCompletionBufSize(t *testing.T) {
 	want := iobuf.BufferSizeLarge / int(unsafe.Sizeof(takt.Completion{}))
 	if takt.DefaultCompletionBufSize != want {

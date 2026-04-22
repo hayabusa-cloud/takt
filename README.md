@@ -76,7 +76,7 @@ if susp != nil {
     var err error
     result, susp, err = takt.Advance(d, susp)
     if iox.IsWouldBlock(err) {
-return susp // yield to the event loop and reschedule when ready
+        return susp // yield to the event loop and reschedule when ready
     }
 }
 // result holds the final value
@@ -97,7 +97,7 @@ if susp != nil {
     var err error
     either, susp, err = takt.AdvanceError[string](d, susp)
     if iox.IsWouldBlock(err) {
-return susp // yield to the event loop and reschedule when ready
+        return susp // yield to the event loop and reschedule when ready
     }
 }
 ```
@@ -152,9 +152,9 @@ loopB := takt.NewLoop[*myBackend, int](backend, takt.WithMemory(heap))
 // BoundedMemory: one bounded pool of default-sized 128 KiB slabs. WithPoolCapacity tunes that pool's capacity (rounded up to the next power of two by iobuf).
 bounded := takt.NewBoundedMemory(takt.WithPoolCapacity(4))
 loop = takt.NewLoop[*myBackend, int](
-backend,
-takt.WithMemory(bounded),
-takt.WithMaxCompletions(64),
+    backend,
+    takt.WithMemory(bounded),
+    takt.WithMaxCompletions(64),
 )
 ```
 
@@ -219,7 +219,7 @@ under one `Loop`:
 type myDispatcher struct{ /* ... */ }
 
 func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-// Return (value, nil) on completion or (nil, iox.ErrWouldBlock) to yield.
+    // Return (value, nil) on completion or (nil, iox.ErrWouldBlock) to yield.
 }
 
 // 2. Define the backend: submits ops to the OS proactor and polls completions.
