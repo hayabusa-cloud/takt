@@ -8,12 +8,14 @@ import (
 	"code.hybscloud.com/kont"
 )
 
-// Reify converts Cont-world to Expr-world.
+// Reify converts [kont.Eff] to [kont.Expr].
+// Prefer package-owned runners such as [ExecExpr], [Advance], or [Loop] when executing the result.
 func Reify[A any](m kont.Eff[A]) kont.Expr[A] {
 	return kont.Reify(m)
 }
 
-// Reflect converts Expr-world to Cont-world.
+// Reflect converts [kont.Expr] to [kont.Eff].
+// Prefer package-owned runners such as [Exec], [Advance], or [Loop] when executing the result.
 func Reflect[A any](m kont.Expr[A]) kont.Eff[A] {
 	return kont.Reflect(m)
 }
