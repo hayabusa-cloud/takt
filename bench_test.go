@@ -41,7 +41,7 @@ func benchCont(val int) kont.Expr[int] {
 
 func BenchmarkLoopSubmitPoll(b *testing.B) {
 	backend := &benchBackend{value: kont.Erased(42)}
-	loop := takt.NewLoop[*benchBackend, int](backend, 1)
+	loop := takt.NewLoop[*benchBackend, int](backend, takt.WithMaxCompletions(1))
 	expr := benchCont(42)
 
 	b.ResetTimer()
@@ -59,7 +59,7 @@ func BenchmarkLoopSubmitPoll(b *testing.B) {
 
 func BenchmarkLoopSubmitPure(b *testing.B) {
 	backend := &benchBackend{}
-	loop := takt.NewLoop[*benchBackend, int](backend, 1)
+	loop := takt.NewLoop[*benchBackend, int](backend, takt.WithMaxCompletions(1))
 	expr := kont.ExprReturn(42)
 
 	b.ResetTimer()
@@ -90,7 +90,7 @@ func (b *dummyRaceBackend) Poll(completions []takt.Completion) (int, error) {
 
 func BenchmarkLoopConcurrentSubmit(b *testing.B) {
 	backend := &dummyRaceBackend{}
-	l := takt.NewLoop[*dummyRaceBackend, *int](backend, 1024)
+	l := takt.NewLoop[*dummyRaceBackend, *int](backend, takt.WithMaxCompletions(1024))
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -107,7 +107,7 @@ func BenchmarkLoopRunAccumulatedResults(b *testing.B) {
 	for b.Loop() {
 		b.StopTimer()
 		backend := &immediateBackend{dispatch: d.Dispatch}
-		loop := takt.NewLoop[*immediateBackend, int](backend, pending)
+		loop := takt.NewLoop[*immediateBackend, int](backend, takt.WithMaxCompletions(pending))
 		for j := 0; j < pending; j++ {
 			if _, done, err := loop.SubmitExpr(kont.ExprPerform(echoOp{})); err != nil || done {
 				b.Fatalf("submit[%d]: done=%v err=%v", j, done, err)
@@ -121,6 +121,28 @@ func BenchmarkLoopRunAccumulatedResults(b *testing.B) {
 		}
 		if len(results) != pending {
 			b.Fatalf("got %d results, want %d", len(results), pending)
+		}
+	}
+}
+
+func BenchmarkLoopRunChainedSingleCompletion(b *testing.B) {
+	d := &testDispatcher{value: 1}
+	b.ReportAllocs()
+	for b.Loop() {
+		b.StopTimer()
+		backend := &immediateBackend{dispatch: d.Dispatch}
+		loop := takt.NewLoop[*immediateBackend, int](backend, takt.WithMaxCompletions(1))
+		if _, done, err := loop.SubmitExpr(echoChain(64)); err != nil || done {
+			b.Fatalf("submit: done=%v err=%v", done, err)
+		}
+		b.StartTimer()
+
+		results, err := loop.Run()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(results) != 1 || results[0] != 64 {
+			b.Fatalf("results = %#v, want [64]", results)
 		}
 	}
 }
