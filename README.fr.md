@@ -7,15 +7,22 @@
 
 # takt
 
-Moteur de dispatch abstrait pilote par evenements de completion pour les piles d'E/S non bloquantes.
+Moteur de dispatch abstrait, piloté par les événements de complétion, pour les piles d'E/S non bloquantes.
 
-## Presentation
+## Présentation
 
-Dans un modele proactor, les operations d'E/S sont soumises au noyau et leurs completions arrivent de maniere asynchrone. L'application doit correler chaque completion avec le calcul qui l'a demandee, reprendre ce calcul et gerer toute la gamme de resultats — succes, progres partiel, contrepression et echec.
+Dans un modèle proactor, les opérations d'E/S sont soumises au noyau et leurs complétions arrivent de manière
+asynchrone. L'application doit corréler chaque complétion avec le calcul qui l'a demandée, reprendre ce calcul, puis
+traiter toute la gamme de résultats — succès, progrès partiel, contre-pression et échec.
 
-`takt` fournit cette algebre de dispatch comme une couche abstraite au-dessus du systeme d'effets [kont](https://code.hybscloud.com/kont). Un `Dispatcher` evalue un effet algebrique a la fois, classifiant le resultat selon l'algebre de resultats [iox](https://code.hybscloud.com/iox). Un `Backend` soumet les operations a un moteur asynchrone (ex., `io_uring`) et sonde les completions. La boucle d'evenements `Loop` les relie : elle soumet les calculs, sonde le backend, correle les completions par jeton et reprend les continuations suspendues.
+`takt` fournit ce modèle d'exécution comme une couche abstraite au-dessus du système d'
+effets [kont](https://code.hybscloud.com/kont). Un `Dispatcher` évalue un effet algébrique à la fois et classe le
+résultat selon l'algèbre de résultats [iox](https://code.hybscloud.com/iox). Un `Backend` soumet les opérations à un
+moteur asynchrone (par ex. `io_uring`) et sonde les complétions. `Loop` les relie : il soumet les calculs, sonde le
+backend, corrèle les complétions par jeton et reprend les continuations suspendues.
 
-Deux APIs equivalentes : Cont (base sur les fermetures, composition directe) et Expr (defonctionnalise, surcout d'allocation reduit pour les chemins critiques).
+Deux API équivalentes sont disponibles : `kont.Eff` (à base de fermetures et simple à composer) et `kont.Expr` (à base
+de frames, avec moins d'allocations sur les chemins critiques).
 
 ## Installation
 
@@ -23,45 +30,49 @@ Deux APIs equivalentes : Cont (base sur les fermetures, composition directe) et 
 go get code.hybscloud.com/takt
 ```
 
-Requires Go 1.26+.
+Nécessite Go 1.26+.
 
-## Classification des Resultats
+## Classification des résultats
 
-Chaque operation dispatchee retourne un resultat `iox`. Le dispatcher et l'API de stepping gerent chaque cas :
+Chaque opération dispatchée renvoie un résultat `iox`. Le dispatcher et l'API de stepping traitent chaque cas :
 
-| Resultat | Signification | Dispatcher | API de Stepping |
-----------|---------------|------------|-----------------|
- `nil` | complete | reprendre | reprendre, retourner `nil` |
- `ErrMore` | progres, suite attendue | reprendre | reprendre, retourner `ErrMore` |
- `ErrWouldBlock` | pas de progres | attendre | retourner la suspension a l'appelant |
- autre | echec d'infrastructure | panic | retourner l'erreur a l'appelant |
+| Résultat        | Signification           | Dispatcher | API de stepping                    |
+|-----------------|-------------------------|------------|------------------------------------|
+| `nil`           | terminé                 | reprend    | reprend, renvoie `nil`             |
+| `ErrMore`       | progrès, suite attendue | reprend    | reprend, renvoie `ErrMore`         |
+| `ErrWouldBlock` | aucun progrès           | attend     | renvoie la suspension à l'appelant |
+| autre           | échec d'infrastructure  | panique    | renvoie l'erreur à l'appelant      |
 
 ## Utilisation
 
 ### Dispatcher
 
-Un `Dispatcher` mappe chaque effet algebrique a une operation d'E/S concrete et retourne le resultat avec un resultat `iox`.
+Un `Dispatcher` associe chaque effet algébrique à une opération d'E/S concrète et renvoie le résultat accompagné de son
+état `iox`.
 
 ```go
 type myDispatcher struct{ /* ... */ }
 
 func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-    // dispatch op, return (value, nil) or (nil, iox.ErrWouldBlock)
+// dispatcher op, renvoyer (value, nil) ou (nil, iox.ErrWouldBlock)
 }
 ```
 
-### Evaluation Bloquante
+### Évaluation bloquante
 
-`Exec` et `ExecExpr` executent un calcul jusqu'a completion, attendant de maniere synchrone quand le dispatcher retourne `iox.ErrWouldBlock`.
+`Exec` et `ExecExpr` exécutent un calcul jusqu'à complétion en attendant de manière synchrone lorsque le dispatcher
+renvoie `iox.ErrWouldBlock`.
 
 ```go
-result := takt.Exec(d, computation)         // Cont-world
-result := takt.ExecExpr(d, exprComputation) // Expr-world
+result := takt.Exec(d, computation) // kont.Eff
+result := takt.ExecExpr(d, exprComputation) // kont.Expr
 ```
 
-### Stepping
+### Pas à pas
 
-Pour les boucles d'evenements proactor (ex., `io_uring`), `Step` et `Advance` evaluent un effet a la fois. Quand le dispatcher retourne `iox.ErrWouldBlock`, la suspension est retournee a l'appelant, permettant a la boucle d'evenements de replanifier.
+Pour les boucles d'événements proactor (par ex. `io_uring`), `Step` et `Advance` évaluent un effet à la fois. Quand le
+dispatcher renvoie `iox.ErrWouldBlock`, la suspension est rendue à l'appelant, ce qui permet à la boucle d'événements de
+replanifier.
 
 ```go
 result, susp := takt.Step[int](exprComputation)
@@ -69,102 +80,190 @@ if susp != nil {
     var err error
     result, susp, err = takt.Advance(d, susp)
     if iox.IsWouldBlock(err) {
-        return susp // yield to event loop, reschedule when ready
+return susp // céder à la boucle d'événements ; replanifier quand prêt
     }
 }
-// result is the final value
+// result contient la valeur finale
 ```
 
-### Gestion d'Erreurs
+### Gestion des erreurs
 
-Composez les effets de dispatcher avec les effets d'erreur. `Throw` court-circuite le calcul et abandonne la suspension en attente.
+Composez les opérations du dispatcher avec des effets d'erreur. `Throw` court-circuite immédiatement le calcul et
+abandonne la suspension en attente.
 
 ```go
 either := takt.ExecError[string](d, computation)
-// Right on success, Left on Throw
+// Right en cas de succès, Left en cas de Throw
 
-// Stepping with errors
+// Pas à pas avec erreurs
 either, susp := takt.StepError[string, int](exprComputation)
 if susp != nil {
     var err error
     either, susp, err = takt.AdvanceError[string](d, susp)
     if iox.IsWouldBlock(err) {
-        return susp // yield to event loop, reschedule when ready
+return susp // céder à la boucle d'événements ; replanifier quand prêt
     }
 }
 ```
 
-### Boucle d'Evenements
+### Boucle d'événements
 
-Un `Loop` pilote les calculs a travers un `Backend`. Il soumet les operations, sonde les completions, les correle par `Token` et reprend les continuations suspendues.
-`maxCompletions` dans `NewLoop` doit etre strictement superieur a 0.
+Un `Loop` pilote les calculs au travers d'un `Backend`. Il soumet les opérations, sonde les complétions, les corrèle par
+`Token` et reprend les continuations suspendues. `NewLoop` accepte des `Option` fonctionnelles. `WithMaxCompletions(n)`
+panique si `n <= 0` avec `takt: WithMaxCompletions requires n > 0` ; `WithMemory(nil)` panique avec
+`takt: WithMemory requires a non-nil CompletionMemory`.
 
-`Backend.Poll([]Completion) (int, error)` rapporte a la fois le nombre de completions pretes et tout echec de sondage
-d'infrastructure. `Loop` traite `iox.ErrWouldBlock` renvoye par `Poll` comme un tour inactif plutot qu'une erreur
-terminale.
+`Backend.Poll([]Completion) (int, error)` rapporte à la fois le nombre de complétions prêtes et tout échec
+d'infrastructure de sondage. La `Loop` traite un `iox.ErrWouldBlock` renvoyé par `Poll` comme un tour à vide plutôt que
+comme une erreur terminale.
 
-Lorsqu'une completion porte `iox.ErrWouldBlock`, la boucle resoumet la meme operation sous un cycle de vie de suspension
-affine. Si une completion `iox.ErrMore` (multishot) reprendrait dans un nouvel effet suspendu, `Poll` / `Run` retournent
-`ErrUnsupportedMultishot`.
+Lorsqu'une complétion porte `iox.ErrWouldBlock`, la boucle resoumet la même opération. Si une complétion `iox.ErrMore` (
+multishot) devait reprendre dans un nouvel effet suspendu, la boucle enregistre `ErrUnsupportedMultishot`, rejette
+chaque suspension pendante exactement une fois, et tout appel ultérieur à `SubmitExpr` / `Submit` / `Poll` / `Run`
+renvoie cette erreur fatale.
+
+`Loop.Failed()` renvoie l'erreur fatale enregistrée (ou `nil`). `Loop.Drain()` force la boucle dans l'état disposé,
+rejette chaque suspension pendante exactement une fois et n'enregistre `ErrDisposed` que si aucune erreur fatale n'était
+déjà présente ; la méthode est idempotente et préserve toute erreur fatale préexistante.
 
 ```go
-loop := takt.NewLoop[*myBackend, int](backend, 64)
+loop := takt.NewLoop[*myBackend, int](backend, takt.WithMaxCompletions(64))
 
-// Submit computations
+// Soumettre des calculs
 loop.SubmitExpr(exprComputation1)
 loop.SubmitExpr(exprComputation2)
-loop.Submit(contComputation) // Cont-world
+loop.Submit(contComputation) // kont.Eff
 
-// Drive all to completion
+// Faire avancer le tout jusqu'à complétion
 results, err := loop.Run()
 ```
 
-## Apercu de l'API
+`NewLoop` utilise [`HeapMemory`](completion_memory.go) comme fournisseur par défaut du buffer de complétion. Si vous
+voulez que ces buffers proviennent d'un pool borné et stable de slabs de 128 KiB de taille par défaut, passez [
+`BoundedMemory`](completion_memory.go) via [`WithMemory`](option.go) ; ou fournissez n'importe quelle implémentation de
+`CompletionMemory` pour contrôler la stratégie d'allocation sans élargir les contrats de `Backend` ni de `Completion` :
+
+```go
+// Par défaut : HeapMemory + slab de complétion de taille par défaut.
+loop := takt.NewLoop[*myBackend, int](backend)
+
+// Limite la longueur du slab de complétion par scrutation (Memory choisit toujours la forme du slab ; Loop tronque la longueur visible à ce plafond).
+loop = takt.NewLoop[*myBackend, int](backend, takt.WithMaxCompletions(64))
+
+// Partage le sync.Pool d'un même HeapMemory entre plusieurs Loops en passant la même adresse à WithMemory ; copier une valeur HeapMemory ne partagerait pas les slabs recyclés.
+heap := &takt.HeapMemory{}
+loopA := takt.NewLoop[*myBackend, int](backend, takt.WithMemory(heap))
+loopB := takt.NewLoop[*myBackend, int](backend, takt.WithMemory(heap))
+
+// BoundedMemory : un pool borné de slabs de 128 KiB de taille par défaut. WithPoolCapacity ajuste la capacité de ce pool (iobuf l'arrondit à la puissance de deux supérieure).
+bounded := takt.NewBoundedMemory(takt.WithPoolCapacity(4))
+loop = takt.NewLoop[*myBackend, int](
+backend,
+takt.WithMemory(bounded),
+takt.WithMaxCompletions(64),
+)
+```
+
+## Aperçu de l'API
 
 ### Dispatch
 
-- `Dispatcher[D Dispatcher[D]]` — F-bounded dispatch interface
-- `Exec[D, R](d D, m kont.Eff[R]) R` — blocking Cont-world evaluation
-- `ExecExpr[D, R](d D, m kont.Expr[R]) R` — blocking Expr-world evaluation
+- `Dispatcher[D Dispatcher[D]]` — interface de dispatch non bloquante
+- `Exec[D, R](d D, m kont.Eff[R]) R` — évaluation bloquante de `kont.Eff`
+- `ExecExpr[D, R](d D, m kont.Expr[R]) R` — évaluation bloquante de `kont.Expr`
 
-### Stepping
+### Pas à pas
 
-- `Step[R](m kont.Expr[R]) (R, *kont.Suspension[R])` — evaluate to first suspension
-- `Advance[D, R](d D, susp *kont.Suspension[R]) (R, *kont.Suspension[R], error)` — dispatch one operation
+- `SuspensionLike[S, R]` — interface reprenable avec `Op` et `Resume`, implémentée par `cove.SuspensionView`
+- `Step[R](m kont.Expr[R]) (R, *kont.Suspension[R])` — évalue jusqu'à la première suspension
+- `AdvanceSuspension[D, S, R](d D, susp S) (R, S, error)` — dispatche une opération via toute valeur `SuspensionLike`
+- `Advance[D, R](d D, susp *kont.Suspension[R]) (R, *kont.Suspension[R], error)` — dispatche une opération
 
-### Gestion d'Erreurs
+### Gestion des erreurs
 
-- `ExecError[E, D, R](d D, m kont.Eff[R]) kont.Either[E, R]` — blocking with errors
-- `ExecErrorExpr[E, D, R](d D, m kont.Expr[R]) kont.Either[E, R]` — Expr-world with errors
-- `StepError[E, R](m kont.Expr[R]) (kont.Either[E, R], *kont.Suspension[kont.Either[E, R]])` — step with errors
-- `AdvanceError[E, D, R](d D, susp *kont.Suspension[kont.Either[E, R]]) (kont.Either[E, R], *kont.Suspension[kont.Either[E, R]], error)` — advance with errors
+- `ExecError[E, D, R](d D, m kont.Eff[R]) kont.Either[E, R]` — bloquante avec erreurs
+- `ExecErrorExpr[E, D, R](d D, m kont.Expr[R]) kont.Either[E, R]` — évaluation de `kont.Expr` avec gestion d'erreurs
+- `StepError[E, R](m kont.Expr[R]) (kont.Either[E, R], *kont.Suspension[kont.Either[E, R]])` — pas à pas avec erreurs
+-
+`AdvanceError[E, D, R](d D, susp *kont.Suspension[kont.Either[E, R]]) (kont.Either[E, R], *kont.Suspension[kont.Either[E, R]], error)` —
+avancée avec erreurs
 
-### Backend et Boucle d'Evenements
+### Backend et boucle d'événements
 
-- `Backend[B Backend[B]]` — F-bounded async submit/poll interface
-- `Token` — submission-completion correlation (`uint64`)
+- `Backend[B Backend[B]]` — interface asynchrone de submit/poll
+- `CompletionMemory` — fournisseur local du buffer de complétion de la boucle
+- `HeapMemory` — implémentation par défaut (`sync.Pool` avec slabs typés de taille par défaut)
+- `BoundedMemory` — implémentation adossée à iobuf avec un unique pool borné de slabs de 128 KiB de taille par défaut
+- `Option` — option fonctionnelle pour `NewLoop` (`WithMemory`, `WithMaxCompletions`)
+- `CompletionBufOption` — option fonctionnelle pour `CompletionMemory.CompletionBuf` (`WithSize`)
+- `BoundedMemoryOption` — option fonctionnelle pour `NewBoundedMemory` (`WithPoolCapacity`)
+- `Token` — corrélation soumission-complétion (`uint64`)
 - `Completion` — `{Token, Value kont.Resumed, Err error}`
-- `NewLoop[B, R](b B, maxCompletions int) *Loop[B, R]` — create event loop (`maxCompletions > 0`)
-- `(*Loop[B, R]).SubmitExpr(m kont.Expr[R]) (R, bool, error)` — step and submit Expr
-- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)` — step and submit Cont
-- `(*Loop[B, R]).Poll() ([]R, error)` — poll and dispatch completions
-- `(*Loop[B, R]).Run() ([]R, error)` — drive all to completion
-- `(*Loop[B, R]).Pending() int` — count pending operations
-- `ErrUnsupportedMultishot` — multishot completion cannot suspend on a new effect
+- `NewLoop[B, R](b B, opts ...Option) *Loop[B, R]` — crée une boucle d'événements (avec `HeapMemory` et un slab par
+  défaut si rien n'est précisé)
+- `(*Loop[B, R]).SubmitExpr(m kont.Expr[R]) (R, bool, error)` — avance d'un pas et soumet un Expr
+- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)` — avance d'un pas et soumet un `kont.Eff`
+- `(*Loop[B, R]).Poll() ([]R, error)` — sonde et dispatche les complétions
+- `(*Loop[B, R]).Run() ([]R, error)` — fait avancer le tout jusqu'à complétion
+- `(*Loop[B, R]).Pending() int` — nombre d'opérations en attente
+- `(*Loop[B, R]).Failed() error` — erreur fatale terminale, ou nil
+- `(*Loop[B, R]).Drain() int` — abandonne les suspensions en attente et dispose la boucle
+- `ErrUnsupportedMultishot` — une complétion multishot ne peut pas suspendre sur un nouvel effet
+- `ErrDisposed` — la boucle a été disposée via `Drain`
 
 ### Pont
 
 - `Reify[A](kont.Eff[A]) kont.Expr[A]` — Cont → Expr
 - `Reflect[A](kont.Expr[A]) kont.Eff[A]` — Expr → Cont
 
-## References
+## Schémas pratiques
 
-- G. D. Plotkin and M. Pretnar. "Handlers of Algebraic Effects." In *Proc. ESOP*, 2009.
-- T. Uustalu and V. Vene. "Comonadic Notions of Computation." In *ENTCS* 203(5), 2008.
-- D. Ahman and A. Bauer. "Runners in Action." In *Proc. ESOP*, 2020.
+Une intégration complète à une boucle d'événements combine un `Dispatcher` (la sémantique synchrone) avec un `Backend` (
+le proactor) sous une même `Loop` :
+
+```go
+// 1. Définir le dispatcher : associe une opération d'effet à un résultat iox.
+type myDispatcher struct{ /* ... */ }
+
+func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
+// Renvoyer (value, nil) en cas de complétion ou (nil, iox.ErrWouldBlock) pour céder.
+}
+
+// 2. Définir le backend : soumet les opérations au proactor de l'OS et sonde les complétions.
+type myBackend struct{ /* ... */ }
+func (b *myBackend) Submit(op kont.Operation) (takt.Token, error) { /* ... */ }
+func (b *myBackend) Poll(out []takt.Completion) (int, error)      { /* ... */ }
+
+// 3. Piloter : soumettre un ou plusieurs calculs, puis Run jusqu'à complétion.
+loop := takt.NewLoop[*myBackend, int](backend, takt.WithMaxCompletions(64))
+loop.SubmitExpr(prog1)
+loop.SubmitExpr(prog2)
+results, err := loop.Run()
+_ = results; _ = err
+```
+
+Pour la composition avec gestion d'erreurs, utilisez `ExecError` / `StepError` / `AdvanceError` à la place de leurs
+équivalents sans erreur ; `Throw` court-circuite le calcul en cours sans affecter les calculs frères de la même boucle.
+Le motif fusionné dispatcher+backend illustré ici est précisément celui qu'utilise `sess` pour rattacher un endpoint de
+session à un runtime d'E/S réel.
+
+## Références
+
+- Tarmo Uustalu and Varmo Vene. 2008. Comonadic Notions of Computation. *Electronic Notes in Theoretical Computer
+  Science* 203, 5 (June 2008), 263–284. https://doi.org/10.1016/j.entcs.2008.05.029
+- Gordon D. Plotkin and Matija Pretnar. 2009. Handlers of Algebraic Effects. In *Proc. 18th European Symposium on
+  Programming (ESOP '09)*. LNCS 5502, 80–94. https://doi.org/10.1007/978-3-642-00590-9_7
+- Andrej Bauer and Matija Pretnar. 2015. Programming with Algebraic Effects and Handlers. *Journal of Logical and
+  Algebraic Methods in Programming* 84, 1 (Jan. 2015), 108–123. https://arxiv.org/abs/1203.1539
+- Daniel Leijen. 2017. Type Directed Compilation of Row-Typed Algebraic Effects. In *Proc. 44th ACM SIGPLAN Symposium on
+  Principles of Programming Languages (POPL '17)*. 486–499. https://doi.org/10.1145/3009837.3009872
+- Danel Ahman and Andrej Bauer. 2020. Runners in Action. In *Proc. 29th European Symposium on Programming (ESOP '20)*.
+  LNCS 12075, 29–55. https://arxiv.org/abs/1910.11629
+- Daniel Hillerström, Sam Lindley, and Robert Atkey. 2020. Effect Handlers via Generalised Continuations. *Journal of
+  Functional Programming* 30 (2020), e5. https://bentnib.org/handlers-cps-journal.pdf
 
 ## Licence
 
-Licence MIT. Voir [LICENSE](LICENSE) pour les details.
+Licence MIT. Voir [LICENSE](LICENSE) pour les détails.
 
 ©2026 [Hayabusa Cloud Co., Ltd.](https://code.hybscloud.com)
