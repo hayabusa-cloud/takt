@@ -8,6 +8,7 @@ import (
 	"errors"
 	"testing"
 
+	"code.hybscloud.com/cove"
 	"code.hybscloud.com/iox"
 	"code.hybscloud.com/kont"
 	"code.hybscloud.com/takt"
@@ -107,6 +108,75 @@ func TestAdvanceFailure(t *testing.T) {
 	if result != 0 {
 		t.Fatalf("got %d, want 0 (zero value)", result)
 	}
+}
+
+func TestAdvanceSuspensionWithContextPreservesContext(t *testing.T) {
+	cont := kont.Bind(kont.Perform(echoOp{}), func(v int) kont.Eff[int] {
+		return kont.Bind(kont.Perform(echoOp{}), func(w int) kont.Eff[int] {
+			return kont.Pure(v + w)
+		})
+	})
+
+	_, step := cove.StepWith("ctx", cont)
+	if step.Suspension == nil {
+		t.Fatal("expected suspension")
+	}
+
+	d := &testDispatcher{value: 10}
+	result, next, err := takt.AdvanceSuspension(d, step)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if result != 0 {
+		t.Fatalf("got %d, want 0 (zero value)", result)
+	}
+	if next.Suspension == nil {
+		t.Fatal("expected next suspension")
+	}
+	if next.Ask() != "ctx" {
+		t.Fatalf("unexpected ctx: %v", next.Ask())
+	}
+
+	result, done, err := takt.AdvanceSuspension(d, next)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if done.Suspension != nil {
+		t.Fatal("expected completion after second advance")
+	}
+	if done.Ask() != "ctx" {
+		t.Fatalf("unexpected completion ctx: %q", done.Ask())
+	}
+	if result != 20 {
+		t.Fatalf("got %d, want 20", result)
+	}
+}
+
+func TestAdvanceSuspensionWouldBlockReturnsObservedSuspension(t *testing.T) {
+	_, step := cove.StepExprWith("ctx", kont.ExprPerform(echoOp{}))
+	if step.Suspension == nil {
+		t.Fatal("expected suspension")
+	}
+
+	d := &wouldBlockDispatcher{value: 42, blocksN: 1}
+	result, retry, err := takt.AdvanceSuspension(d, step)
+	if !iox.IsWouldBlock(err) {
+		t.Fatalf("expected ErrWouldBlock, got %v", err)
+	}
+	if result != 0 {
+		t.Fatalf("got %d, want 0 (zero value)", result)
+	}
+	if retry.Suspension != step.Suspension {
+		t.Fatal("expected suspension to remain unconsumed")
+	}
+	if retry.Ask() != "ctx" {
+		t.Fatalf("unexpected ctx: %v", retry.Ask())
+	}
+}
+
+func TestSuspensionViewSatisfiesSuspensionLike(t *testing.T) {
+	step := cove.ObserveSuspension("ctx", &kont.Suspension[int]{})
+	var _ takt.SuspensionLike[cove.SuspensionView[string, int], int] = step
 }
 
 func TestFullStepLoop(t *testing.T) {

@@ -65,7 +65,7 @@ func TestPropertyFairnessOrdering(t *testing.T) {
 		count = (count % 500) + 1 // 1 to 500 items
 
 		backend := &propBackend{nextT: 1, shuffle: true}
-		loop := takt.NewLoop[*propBackend, int](backend, count)
+		loop := takt.NewLoop[*propBackend, int](backend, takt.WithMaxCompletions(count))
 
 		for range count {
 			loop.SubmitExpr(propCont())
@@ -98,6 +98,52 @@ func TestPropertyFairnessOrdering(t *testing.T) {
 	}
 }
 
+// TestPropertyExecLoopBisimulation checks that, for a deterministic
+// dispatcher and a deterministic program, the three execution modes — Exec,
+// the Step+Advance stepping loop, and Loop.Submit+Run — produce the same final
+// result.
+func TestPropertyExecLoopBisimulation(t *testing.T) {
+	f := func(seed int) bool {
+		if seed < 0 {
+			seed = -seed
+		}
+		depth := (seed % 16) + 1
+
+		// Mode 1: Exec (blocking handler over a deterministic dispatcher).
+		dExec := &testDispatcher{value: 7}
+		execResult := takt.ExecExpr[*testDispatcher, int](dExec, echoChain(depth))
+
+		// Mode 2: Step + Advance stepping loop.
+		dStep := &testDispatcher{value: 7}
+		stepResult, susp := takt.Step[int](echoChain(depth))
+		var sErr error
+		for susp != nil {
+			stepResult, susp, sErr = takt.Advance(dStep, susp)
+			if sErr != nil {
+				return false
+			}
+		}
+
+		// Mode 3: Loop.Submit + Loop.Run via the immediateBackend.
+		dLoop := &testDispatcher{value: 7}
+		bLoop := &immediateBackend{dispatch: dLoop.Dispatch}
+		l := takt.NewLoop[*immediateBackend, int](bLoop, takt.WithMaxCompletions(depth+4))
+		if _, _, err := l.SubmitExpr(echoChain(depth)); err != nil {
+			return false
+		}
+		runResults, runErr := l.Run()
+		if runErr != nil || len(runResults) != 1 {
+			return false
+		}
+
+		return execResult == stepResult && stepResult == runResults[0]
+	}
+
+	if err := quick.Check(f, &quick.Config{MaxCount: 64}); err != nil {
+		t.Error(err)
+	}
+}
+
 func TestPropertyFaultTolerance(t *testing.T) {
 	f := func(count int, failIdx int) bool {
 		if count < 0 {
@@ -111,7 +157,7 @@ func TestPropertyFaultTolerance(t *testing.T) {
 		failIdx = failIdx % count
 
 		backend := &propBackend{nextT: 1, shuffle: false}
-		loop := takt.NewLoop[*propBackend, int](backend, count)
+		loop := takt.NewLoop[*propBackend, int](backend, takt.WithMaxCompletions(count))
 
 		successCount := 0
 		for i := range count {

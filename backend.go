@@ -4,6 +4,16 @@
 
 package takt
 
+// Polling reports two kinds of information:
+//
+// 1. whether the poll call itself succeeded
+// 2. which token-correlated completions were written into the provided buffer
+//
+// The [Backend.Poll] signature uses `(n int, err error)` with the convention
+// that `n > 0` and `err != nil` are never returned together. [Loop] handles
+// poll errors separately from the per-completion outcome recorded in each
+// [Completion].
+
 import (
 	"code.hybscloud.com/kont"
 )
@@ -11,19 +21,19 @@ import (
 // Token correlates a submitted operation with its completion.
 type Token uint64
 
-// Completion carries a backend result with iox outcome.
+// Completion carries token-correlated backend evidence together with an `iox` outcome.
 type Completion struct {
 	Token Token
 	Value kont.Resumed
 	Err   error
 }
 
-// Backend is the F-bounded interface for async submit/poll.
+// Backend is the interface for asynchronous submit/poll execution.
 type Backend[B Backend[B]] interface {
-	// Submit sends an operation. Returns a correlation token.
+	// Submit sends an operation and returns a correlation token.
 	Submit(op kont.Operation) (Token, error)
 
-	// Poll writes ready completions into completions and reports any
+	// Poll writes ready completions into `completions` and reports any
 	// infrastructure wait failure.
 	Poll(completions []Completion) (int, error)
 }

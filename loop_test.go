@@ -14,206 +14,10 @@ import (
 	"code.hybscloud.com/takt"
 )
 
-// immediateBackend dispatches operations synchronously via a dispatch function.
-// Submit queues the completion; Poll returns queued completions.
-type immediateBackend struct {
-	dispatch func(op kont.Operation) (kont.Resumed, error)
-	nextTok  takt.Token
-	ready    []takt.Completion
-}
-
-func (b *immediateBackend) Submit(op kont.Operation) (takt.Token, error) {
-	tok := b.nextTok
-	b.nextTok++
-	v, err := b.dispatch(op)
-	b.ready = append(b.ready, takt.Completion{
-		Token: tok,
-		Value: v,
-		Err:   err,
-	})
-	return tok, nil
-}
-
-func (b *immediateBackend) Poll(completions []takt.Completion) (int, error) {
-	n := copy(completions, b.ready)
-	b.ready = b.ready[n:]
-	return n, nil
-}
-
-// failSubmitBackend fails on the Nth Submit call.
-type failSubmitBackend struct {
-	dispatch func(op kont.Operation) (kont.Resumed, error)
-	nextTok  takt.Token
-	ready    []takt.Completion
-	failAt   int
-	submits  int
-}
-
-func (b *failSubmitBackend) Submit(op kont.Operation) (takt.Token, error) {
-	b.submits++
-	if b.submits == b.failAt {
-		return 0, errors.New("takt_test: submit failed")
-	}
-	tok := b.nextTok
-	b.nextTok++
-	v, err := b.dispatch(op)
-	b.ready = append(b.ready, takt.Completion{
-		Token: tok,
-		Value: v,
-		Err:   err,
-	})
-	return tok, nil
-}
-
-func (b *failSubmitBackend) Poll(completions []takt.Completion) (int, error) {
-	n := copy(completions, b.ready)
-	b.ready = b.ready[n:]
-	return n, nil
-}
-
-// errMoreBackend returns ErrMore on first completion, then nil on resubmit.
-type errMoreBackend struct {
-	nextTok takt.Token
-	ready   []takt.Completion
-}
-
-func (b *errMoreBackend) Submit(op kont.Operation) (takt.Token, error) {
-	tok := b.nextTok
-	b.nextTok++
-	if _, ok := op.(echoOp); ok {
-		b.ready = append(b.ready, takt.Completion{
-			Token: tok,
-			Value: 10,
-			Err:   iox.ErrMore,
-		})
-	}
-	return tok, nil
-}
-
-func (b *errMoreBackend) Poll(completions []takt.Completion) (int, error) {
-	n := copy(completions, b.ready)
-	b.ready = b.ready[n:]
-	return n, nil
-}
-
-// failureBackend returns a failure error in completions.
-type failureBackend struct {
-	nextTok takt.Token
-	ready   []takt.Completion
-}
-
-func (b *failureBackend) Submit(op kont.Operation) (takt.Token, error) {
-	tok := b.nextTok
-	b.nextTok++
-	// On failure, Value is still valid per backend contract.
-	b.ready = append(b.ready, takt.Completion{
-		Token: tok,
-		Value: -1,
-		Err:   errors.New("takt_test: device error"),
-	})
-	return tok, nil
-}
-
-func (b *failureBackend) Poll(completions []takt.Completion) (int, error) {
-	n := copy(completions, b.ready)
-	b.ready = b.ready[n:]
-	return n, nil
-}
-
-type wouldBlockCompletionBackend struct {
-	nextTok  takt.Token
-	attempts int
-	ready    []takt.Completion
-}
-
-func (b *wouldBlockCompletionBackend) Submit(op kont.Operation) (takt.Token, error) {
-	tok := b.nextTok
-	b.nextTok++
-	b.attempts++
-	if b.attempts == 1 {
-		b.ready = append(b.ready, takt.Completion{
-			Token: tok,
-			Value: 0,
-			Err:   iox.ErrWouldBlock,
-		})
-		return tok, nil
-	}
-	b.ready = append(b.ready, takt.Completion{
-		Token: tok,
-		Value: 10,
-		Err:   nil,
-	})
-	return tok, nil
-}
-
-func (b *wouldBlockCompletionBackend) Poll(completions []takt.Completion) (int, error) {
-	n := copy(completions, b.ready)
-	b.ready = b.ready[n:]
-	return n, nil
-}
-
-func echoChain(n int) kont.Expr[int] {
-	if n <= 0 {
-		return kont.ExprReturn(0)
-	}
-	var expr kont.Expr[int] = kont.ExprPerform(echoOp{})
-	for i := 1; i < n; i++ {
-		prev := expr
-		expr = kont.ExprBind(prev, func(total int) kont.Expr[int] {
-			return kont.ExprBind(kont.ExprPerform(echoOp{}), func(v int) kont.Expr[int] {
-				return kont.ExprReturn(total + v)
-			})
-		})
-	}
-	return expr
-}
-
-type pollErrorBackend struct {
-	nextTok takt.Token
-	pollErr error
-}
-
-func (b *pollErrorBackend) Submit(op kont.Operation) (takt.Token, error) {
-	tok := b.nextTok
-	b.nextTok++
-	return tok, nil
-}
-
-func (b *pollErrorBackend) Poll(completions []takt.Completion) (int, error) {
-	return 0, b.pollErr
-}
-
-type idleThenReadyBackend struct {
-	nextTok takt.Token
-	ready   []takt.Completion
-	polls   int
-}
-
-func (b *idleThenReadyBackend) Submit(op kont.Operation) (takt.Token, error) {
-	tok := b.nextTok
-	b.nextTok++
-	b.ready = append(b.ready, takt.Completion{
-		Token: tok,
-		Value: 21,
-		Err:   nil,
-	})
-	return tok, nil
-}
-
-func (b *idleThenReadyBackend) Poll(completions []takt.Completion) (int, error) {
-	b.polls++
-	if b.polls == 1 {
-		return 0, iox.ErrWouldBlock
-	}
-	n := copy(completions, b.ready)
-	b.ready = b.ready[n:]
-	return n, nil
-}
-
 func TestSubmitExprPure(t *testing.T) {
 	d := &testDispatcher{value: 42}
 	b := &immediateBackend{dispatch: d.Dispatch}
-	l := takt.NewLoop[*immediateBackend, int](b, 16)
+	l := takt.NewLoop[*immediateBackend, int](b, takt.WithMaxCompletions(16))
 	result, done, err := l.SubmitExpr(kont.ExprReturn[int](99))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -232,7 +36,7 @@ func TestSubmitExprPure(t *testing.T) {
 func TestSubmitEffectful(t *testing.T) {
 	d := &testDispatcher{value: 42}
 	b := &immediateBackend{dispatch: d.Dispatch}
-	l := takt.NewLoop[*immediateBackend, int](b, 16)
+	l := takt.NewLoop[*immediateBackend, int](b, takt.WithMaxCompletions(16))
 	_, done, err := l.SubmitExpr(kont.ExprPerform(echoOp{}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -248,7 +52,7 @@ func TestSubmitEffectful(t *testing.T) {
 func TestSubmitError(t *testing.T) {
 	d := &testDispatcher{value: 42}
 	b := &failSubmitBackend{dispatch: d.Dispatch, failAt: 1}
-	l := takt.NewLoop[*failSubmitBackend, int](b, 16)
+	l := takt.NewLoop[*failSubmitBackend, int](b, takt.WithMaxCompletions(16))
 	_, done, err := l.SubmitExpr(kont.ExprPerform(echoOp{}))
 	if err == nil {
 		t.Fatal("expected submit error")
@@ -264,7 +68,7 @@ func TestSubmitError(t *testing.T) {
 func TestPollDispatchesCompletion(t *testing.T) {
 	d := &testDispatcher{value: 42}
 	b := &immediateBackend{dispatch: d.Dispatch}
-	l := takt.NewLoop[*immediateBackend, int](b, 16)
+	l := takt.NewLoop[*immediateBackend, int](b, takt.WithMaxCompletions(16))
 	l.SubmitExpr(kont.ExprPerform(echoOp{}))
 
 	results, err := l.Poll()
@@ -284,7 +88,7 @@ func TestPollDispatchesCompletion(t *testing.T) {
 
 func TestPollErrMoreKeepsToken(t *testing.T) {
 	b := &errMoreBackend{}
-	l := takt.NewLoop[*errMoreBackend, int](b, 16)
+	l := takt.NewLoop[*errMoreBackend, int](b, takt.WithMaxCompletions(16))
 
 	// Multi-step: first effect gets ErrMore completion
 	m := kont.ExprBind(kont.ExprPerform(echoOp{}), func(a int) kont.Expr[int] {
@@ -310,7 +114,7 @@ func TestPollErrMoreKeepsToken(t *testing.T) {
 
 func TestPollFailureResumesWithValue(t *testing.T) {
 	b := &failureBackend{}
-	l := takt.NewLoop[*failureBackend, int](b, 16)
+	l := takt.NewLoop[*failureBackend, int](b, takt.WithMaxCompletions(16))
 
 	// Single effect: failure completion resumes with Value (-1)
 	l.SubmitExpr(kont.ExprPerform(echoOp{}))
@@ -329,7 +133,7 @@ func TestPollFailureResumesWithValue(t *testing.T) {
 
 func TestPollWouldBlockIsIdle(t *testing.T) {
 	b := &pollErrorBackend{pollErr: iox.ErrWouldBlock}
-	l := takt.NewLoop[*pollErrorBackend, int](b, 16)
+	l := takt.NewLoop[*pollErrorBackend, int](b, takt.WithMaxCompletions(16))
 
 	l.SubmitExpr(kont.ExprPerform(echoOp{}))
 
@@ -340,6 +144,9 @@ func TestPollWouldBlockIsIdle(t *testing.T) {
 	if len(results) != 0 {
 		t.Fatalf("got %d results, want 0", len(results))
 	}
+	if results != nil {
+		t.Fatalf("idle Poll results = %#v, want nil", results)
+	}
 	if l.Pending() != 1 {
 		t.Fatalf("pending %d, want 1", l.Pending())
 	}
@@ -347,7 +154,7 @@ func TestPollWouldBlockIsIdle(t *testing.T) {
 
 func TestPollCompletionWouldBlockResubmitsOperation(t *testing.T) {
 	b := &wouldBlockCompletionBackend{}
-	l := takt.NewLoop[*wouldBlockCompletionBackend, int](b, 16)
+	l := takt.NewLoop[*wouldBlockCompletionBackend, int](b, takt.WithMaxCompletions(16))
 
 	l.SubmitExpr(kont.ExprPerform(echoOp{}))
 
@@ -389,7 +196,7 @@ func TestPollCompletionWouldBlockResubmitErrorClearsPending(t *testing.T) {
 			return 10, nil
 		},
 	}
-	l := takt.NewLoop[*failSubmitBackend, int](b, 16)
+	l := takt.NewLoop[*failSubmitBackend, int](b, takt.WithMaxCompletions(16))
 
 	if _, done, err := l.SubmitExpr(kont.ExprPerform(echoOp{})); err != nil || done {
 		t.Fatalf("submit = (_, %v, %v), want pending with nil error", done, err)
@@ -413,7 +220,7 @@ func TestPollCompletionWouldBlockResubmitErrorClearsPending(t *testing.T) {
 func TestPollBackendErrorReturned(t *testing.T) {
 	pollErr := errors.New("takt_test: poll failed")
 	b := &pollErrorBackend{pollErr: pollErr}
-	l := takt.NewLoop[*pollErrorBackend, int](b, 16)
+	l := takt.NewLoop[*pollErrorBackend, int](b, takt.WithMaxCompletions(16))
 
 	l.SubmitExpr(kont.ExprPerform(echoOp{}))
 
@@ -424,15 +231,70 @@ func TestPollBackendErrorReturned(t *testing.T) {
 	if len(results) != 0 {
 		t.Fatalf("got %d results, want 0", len(results))
 	}
-	if l.Pending() != 1 {
-		t.Fatalf("pending %d, want 1", l.Pending())
+	// Affine cleanup: pending suspensions are drained on fatal so each
+	// `*kont.Suspension[R]` is consumed exactly once.
+	if l.Pending() != 0 {
+		t.Fatalf("pending %d, want 0 (drained on fatal)", l.Pending())
+	}
+	if l.Failed() != pollErr {
+		t.Fatalf("Failed() = %v, want %v", l.Failed(), pollErr)
+	}
+}
+
+func TestPollAfterFatalReturnsStoredError(t *testing.T) {
+	pollErr := errors.New("takt_test: poll failed")
+	b := &pollErrorBackend{pollErr: pollErr}
+	l := takt.NewLoop[*pollErrorBackend, int](b, takt.WithMaxCompletions(16))
+
+	if _, done, err := l.SubmitExpr(kont.ExprPerform(echoOp{})); err != nil || done {
+		t.Fatalf("submit = (_, %v, %v), want pending with nil error", done, err)
+	}
+
+	results, err := l.Poll()
+	if err != pollErr {
+		t.Fatalf("first poll err = %v, want %v", err, pollErr)
+	}
+	if len(results) != 0 {
+		t.Fatalf("got %d results, want 0", len(results))
+	}
+
+	results, err = l.Poll()
+	if err != pollErr {
+		t.Fatalf("second poll err = %v, want %v", err, pollErr)
+	}
+	if len(results) != 0 {
+		t.Fatalf("got %d results, want 0", len(results))
+	}
+}
+
+func TestSubmitExprAfterFatalReturnsStoredError(t *testing.T) {
+	pollErr := errors.New("takt_test: poll failed")
+	b := &pollErrorBackend{pollErr: pollErr}
+	l := takt.NewLoop[*pollErrorBackend, int](b, takt.WithMaxCompletions(16))
+
+	if _, done, err := l.SubmitExpr(kont.ExprPerform(echoOp{})); err != nil || done {
+		t.Fatalf("submit = (_, %v, %v), want pending with nil error", done, err)
+	}
+	if _, err := l.Poll(); err != pollErr {
+		t.Fatalf("poll err = %v, want %v", err, pollErr)
+	}
+
+	result, done, err := l.SubmitExpr(kont.ExprReturn(99))
+	if err != pollErr {
+		t.Fatalf("submit after fatal err = %v, want %v", err, pollErr)
+	}
+	if done {
+		t.Fatal("expected stored fatal error, not completion")
+	}
+	if result != 0 {
+		t.Fatalf("result = %d, want 0", result)
 	}
 }
 
 func TestPollResubmitsNextSuspension(t *testing.T) {
 	d := &testDispatcher{value: 10}
 	b := &immediateBackend{dispatch: d.Dispatch}
-	l := takt.NewLoop[*immediateBackend, int](b, 16)
+	l := takt.NewLoop[*immediateBackend, int](b, takt.WithMaxCompletions(16))
 
 	// Two effects chained
 	m := kont.ExprBind(kont.ExprPerform(echoOp{}), func(a int) kont.Expr[int] {
@@ -471,7 +333,7 @@ func TestPollResubmitError(t *testing.T) {
 	// Second submit fails (resubmit after first completion)
 	d := &testDispatcher{value: 10}
 	b := &failSubmitBackend{dispatch: d.Dispatch, failAt: 2}
-	l := takt.NewLoop[*failSubmitBackend, int](b, 16)
+	l := takt.NewLoop[*failSubmitBackend, int](b, takt.WithMaxCompletions(16))
 
 	m := kont.ExprBind(kont.ExprPerform(echoOp{}), func(a int) kont.Expr[int] {
 		return kont.ExprBind(kont.ExprPerform(echoOp{}), func(b int) kont.Expr[int] {
@@ -489,10 +351,47 @@ func TestPollResubmitError(t *testing.T) {
 	_ = results
 }
 
+func TestPollReturnsResultsBeforeStoredFatal(t *testing.T) {
+	d := &testDispatcher{value: 10}
+	b := &failSubmitBackend{dispatch: d.Dispatch, failAt: 3}
+	l := takt.NewLoop[*failSubmitBackend, int](b, takt.WithMaxCompletions(16))
+
+	if _, done, err := l.SubmitExpr(kont.ExprPerform(echoOp{})); err != nil || done {
+		t.Fatalf("first submit = (_, %v, %v), want pending with nil error", done, err)
+	}
+	chained := kont.ExprBind(kont.ExprPerform(echoOp{}), func(a int) kont.Expr[int] {
+		return kont.ExprBind(kont.ExprPerform(echoOp{}), func(b int) kont.Expr[int] {
+			return kont.ExprReturn(a + b)
+		})
+	})
+	if _, done, err := l.SubmitExpr(chained); err != nil || done {
+		t.Fatalf("second submit = (_, %v, %v), want pending with nil error", done, err)
+	}
+
+	results, err := l.Poll()
+	if err != nil {
+		t.Fatalf("first poll err = %v, want nil", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0] != 10 {
+		t.Fatalf("got %d, want 10", results[0])
+	}
+
+	results, err = l.Poll()
+	if err == nil {
+		t.Fatal("expected stored fatal error on next poll")
+	}
+	if len(results) != 0 {
+		t.Fatalf("got %d results, want 0", len(results))
+	}
+}
+
 func TestRunDrivesToCompletion(t *testing.T) {
 	d := &testDispatcher{value: 10}
 	b := &immediateBackend{dispatch: d.Dispatch}
-	l := takt.NewLoop[*immediateBackend, int](b, 16)
+	l := takt.NewLoop[*immediateBackend, int](b, takt.WithMaxCompletions(16))
 
 	m := kont.ExprBind(kont.ExprPerform(echoOp{}), func(a int) kont.Expr[int] {
 		return kont.ExprBind(kont.ExprPerform(echoOp{}), func(b int) kont.Expr[int] {
@@ -513,9 +412,44 @@ func TestRunDrivesToCompletion(t *testing.T) {
 	}
 }
 
+func TestNewLoopRejectsNonPositiveMaxCompletions(t *testing.T) {
+	for _, n := range []int{0, -1, -1024} {
+		func(n int) {
+			defer func() {
+				r := recover()
+				if r == nil {
+					t.Fatalf("NewLoop(%d) did not panic", n)
+				}
+				msg, ok := r.(string)
+				if !ok || msg != "takt: WithMaxCompletions requires n > 0" {
+					t.Fatalf("NewLoop(%d) panic = %v, want fixed message", n, r)
+				}
+			}()
+			b := &immediateBackend{}
+			_ = takt.NewLoop[*immediateBackend, int](b, takt.WithMaxCompletions(n))
+		}(n)
+	}
+}
+
+func TestRunAfterDrainSurfacesFatal(t *testing.T) {
+	b := &immediateBackend{}
+	l := takt.NewLoop[*immediateBackend, int](b, takt.WithMaxCompletions(4))
+
+	if drained := l.Drain(); drained != 0 {
+		t.Fatalf("Drain on idle loop = %d, want 0", drained)
+	}
+	results, err := l.Run()
+	if err != takt.ErrDisposed {
+		t.Fatalf("Run after Drain err = %v, want ErrDisposed", err)
+	}
+	if results != nil {
+		t.Fatalf("Run after Drain results = %#v, want nil", results)
+	}
+}
+
 func TestRunWithNoPendingReturnsNil(t *testing.T) {
 	b := &immediateBackend{}
-	l := takt.NewLoop[*immediateBackend, int](b, 16)
+	l := takt.NewLoop[*immediateBackend, int](b, takt.WithMaxCompletions(16))
 
 	results, err := l.Run()
 	if err != nil {
@@ -526,10 +460,120 @@ func TestRunWithNoPendingReturnsNil(t *testing.T) {
 	}
 }
 
+func TestFailedNilBeforeFatal(t *testing.T) {
+	b := &immediateBackend{}
+	l := takt.NewLoop[*immediateBackend, int](b, takt.WithMaxCompletions(4))
+	if err := l.Failed(); err != nil {
+		t.Fatalf("Failed() = %v, want nil before any fatal", err)
+	}
+}
+
+func TestDrainBeforeFatalDiscardsPendingAndPoisonsLoop(t *testing.T) {
+	d := &testDispatcher{value: 1}
+	b := &immediateBackend{dispatch: d.Dispatch}
+	l := takt.NewLoop[*immediateBackend, int](b, takt.WithMaxCompletions(4))
+
+	if _, _, err := l.SubmitExpr(kont.ExprPerform(echoOp{})); err != nil {
+		t.Fatalf("submit err = %v, want nil", err)
+	}
+	if _, _, err := l.SubmitExpr(kont.ExprPerform(echoOp{})); err != nil {
+		t.Fatalf("submit err = %v, want nil", err)
+	}
+	if l.Pending() != 2 {
+		t.Fatalf("pending before drain = %d, want 2", l.Pending())
+	}
+
+	drained := l.Drain()
+	if drained != 2 {
+		t.Fatalf("Drain() = %d, want 2", drained)
+	}
+	if l.Pending() != 0 {
+		t.Fatalf("pending after drain = %d, want 0", l.Pending())
+	}
+	if err := l.Failed(); err != takt.ErrDisposed {
+		t.Fatalf("Failed() after drain = %v, want ErrDisposed", err)
+	}
+
+	// Drain is idempotent.
+	if again := l.Drain(); again != 0 {
+		t.Fatalf("second Drain() = %d, want 0 (idempotent)", again)
+	}
+	if err := l.Failed(); err != takt.ErrDisposed {
+		t.Fatalf("Failed() after second drain = %v, want ErrDisposed", err)
+	}
+
+	// Subsequent Submit/Poll observe the disposed state.
+	if _, _, err := l.SubmitExpr(kont.ExprReturn(0)); err != takt.ErrDisposed {
+		t.Fatalf("SubmitExpr after drain = %v, want ErrDisposed", err)
+	}
+	if _, err := l.Poll(); err != takt.ErrDisposed {
+		t.Fatalf("Poll after drain = %v, want ErrDisposed", err)
+	}
+}
+
+func TestDrainAfterFatalPreservesOriginalError(t *testing.T) {
+	pollErr := errors.New("takt_test: poll failed")
+	b := &pollErrorBackend{pollErr: pollErr}
+	l := takt.NewLoop[*pollErrorBackend, int](b, takt.WithMaxCompletions(4))
+
+	if _, _, err := l.SubmitExpr(kont.ExprPerform(echoOp{})); err != nil {
+		t.Fatalf("submit err = %v, want nil", err)
+	}
+	if _, err := l.Poll(); err != pollErr {
+		t.Fatalf("poll err = %v, want %v", err, pollErr)
+	}
+	// Pending was already drained on fatal; Drain returns 0 but must not
+	// overwrite the original fatal error.
+	if drained := l.Drain(); drained != 0 {
+		t.Fatalf("Drain() after fatal = %d, want 0", drained)
+	}
+	if err := l.Failed(); err != pollErr {
+		t.Fatalf("Failed() after Drain post-fatal = %v, want %v", err, pollErr)
+	}
+}
+
+func TestDrainAfterFatalReleasesMemoryExactlyOnceAndPreservesError(t *testing.T) {
+	pollErr := errors.New("takt_test: poll failed")
+	mem := &recordingMemory{}
+	b := &pollErrorBackend{pollErr: pollErr}
+	l := takt.NewLoop[*pollErrorBackend, int](b, takt.WithMemory(mem),
+		takt.WithMaxCompletions(4))
+
+	if _, _, err := l.SubmitExpr(kont.ExprPerform(echoOp{})); err != nil {
+		t.Fatalf("submit err = %v, want nil", err)
+	}
+	if _, err := l.Poll(); err != pollErr {
+		t.Fatalf("poll err = %v, want %v", err, pollErr)
+	}
+	if mem.released {
+		t.Fatal("CompletionMemory.Release called before Drain")
+	}
+
+	if drained := l.Drain(); drained != 0 {
+		t.Fatalf("Drain() after fatal = %d, want 0", drained)
+	}
+	if err := l.Failed(); err != pollErr {
+		t.Fatalf("Failed() after Drain post-fatal = %v, want %v", err, pollErr)
+	}
+	if mem.releaseCalls != 1 {
+		t.Fatalf("CompletionMemory.Release calls after fatal Drain = %d, want 1", mem.releaseCalls)
+	}
+
+	if drained := l.Drain(); drained != 0 {
+		t.Fatalf("second Drain() after fatal = %d, want 0", drained)
+	}
+	if err := l.Failed(); err != pollErr {
+		t.Fatalf("Failed() after second Drain post-fatal = %v, want %v", err, pollErr)
+	}
+	if mem.releaseCalls != 1 {
+		t.Fatalf("CompletionMemory.Release calls after second fatal Drain = %d, want 1", mem.releaseCalls)
+	}
+}
+
 func TestRunSkipsBackoffOnProgressOnlyPolls(t *testing.T) {
 	d := &testDispatcher{value: 1}
 	b := &immediateBackend{dispatch: d.Dispatch}
-	l := takt.NewLoop[*immediateBackend, int](b, 16)
+	l := takt.NewLoop[*immediateBackend, int](b, takt.WithMaxCompletions(16))
 
 	l.SubmitExpr(echoChain(60))
 
@@ -551,7 +595,7 @@ func TestRunSkipsBackoffOnProgressOnlyPolls(t *testing.T) {
 
 func TestRunWaitsThroughIdlePolls(t *testing.T) {
 	b := &idleThenReadyBackend{}
-	l := takt.NewLoop[*idleThenReadyBackend, int](b, 16)
+	l := takt.NewLoop[*idleThenReadyBackend, int](b, takt.WithMaxCompletions(16))
 
 	if _, done, err := l.SubmitExpr(kont.ExprPerform(echoOp{})); err != nil || done {
 		t.Fatalf("submit = (_, %v, %v), want pending with nil error", done, err)
@@ -575,7 +619,7 @@ func TestRunWaitsThroughIdlePolls(t *testing.T) {
 func TestMultipleConcurrentSubmissions(t *testing.T) {
 	d := &testDispatcher{value: 5}
 	b := &immediateBackend{dispatch: d.Dispatch}
-	l := takt.NewLoop[*immediateBackend, int](b, 16)
+	l := takt.NewLoop[*immediateBackend, int](b, takt.WithMaxCompletions(16))
 
 	for range 3 {
 		l.SubmitExpr(kont.ExprPerform(echoOp{}))
@@ -601,7 +645,7 @@ func TestMultipleConcurrentSubmissions(t *testing.T) {
 func TestPendingCount(t *testing.T) {
 	d := &testDispatcher{value: 42}
 	b := &immediateBackend{dispatch: d.Dispatch}
-	l := takt.NewLoop[*immediateBackend, int](b, 16)
+	l := takt.NewLoop[*immediateBackend, int](b, takt.WithMaxCompletions(16))
 
 	if l.Pending() != 0 {
 		t.Fatalf("initial pending %d, want 0", l.Pending())
@@ -623,7 +667,7 @@ func TestPendingCount(t *testing.T) {
 func TestSubmit(t *testing.T) {
 	d := &testDispatcher{value: 42}
 	b := &immediateBackend{dispatch: d.Dispatch}
-	l := takt.NewLoop[*immediateBackend, int](b, 16)
+	l := takt.NewLoop[*immediateBackend, int](b, takt.WithMaxCompletions(16))
 
 	m := kont.Perform(echoOp{})
 	_, done, err := l.Submit(m)
@@ -650,7 +694,7 @@ func TestPollErrMoreMultiStep(t *testing.T) {
 	// ErrMore keeps token: after resume, if computation suspends again,
 	// the token should still map to the new suspension.
 	b := &errMoreBackend{}
-	l := takt.NewLoop[*errMoreBackend, int](b, 16)
+	l := takt.NewLoop[*errMoreBackend, int](b, takt.WithMaxCompletions(16))
 
 	// Single effect computation: ErrMore resume → immediate completion
 	l.SubmitExpr(kont.ExprPerform(echoOp{}))
@@ -670,7 +714,7 @@ func TestPollErrMoreMultiStep(t *testing.T) {
 func TestSubmitPure(t *testing.T) {
 	d := &testDispatcher{value: 42}
 	b := &immediateBackend{dispatch: d.Dispatch}
-	l := takt.NewLoop[*immediateBackend, int](b, 16)
+	l := takt.NewLoop[*immediateBackend, int](b, takt.WithMaxCompletions(16))
 
 	result, done, err := l.Submit(kont.Pure(99))
 	if err != nil {
@@ -684,36 +728,12 @@ func TestSubmitPure(t *testing.T) {
 	}
 }
 
-// multishotBackend queues two completions per submit: first ErrMore, then nil.
-// Simulates a multishot backend where a single token produces multiple completions.
-type multishotBackend struct {
-	nextTok takt.Token
-	ready   []takt.Completion
-}
-
-func (b *multishotBackend) Submit(op kont.Operation) (takt.Token, error) {
-	tok := b.nextTok
-	b.nextTok++
-	// Queue two completions for the same token: ErrMore then OK
-	b.ready = append(b.ready,
-		takt.Completion{Token: tok, Value: 10, Err: iox.ErrMore},
-		takt.Completion{Token: tok, Value: 20, Err: nil},
-	)
-	return tok, nil
-}
-
-func (b *multishotBackend) Poll(completions []takt.Completion) (int, error) {
-	n := copy(completions, b.ready)
-	b.ready = b.ready[n:]
-	return n, nil
-}
-
 func TestPollErrMoreResuspendReturnsError(t *testing.T) {
 	// ErrMore completion resumes, but computation suspends again on next effect.
-	// The current Loop token model cannot safely track both the live multishot
-	// source and a new submitted effect under one correlation token.
+	// The current Loop implementation cannot safely track both the live
+	// multishot source and a new submitted effect under one correlation token.
 	b := &multishotBackend{}
-	l := takt.NewLoop[*multishotBackend, int](b, 1) // maxCompletions=1 so we poll one completion at a time
+	l := takt.NewLoop[*multishotBackend, int](b, takt.WithMaxCompletions(1)) // maxCompletions=1 so we poll one completion at a time
 
 	// Two effects chained: first gets ErrMore, resume yields second effect
 	m := kont.ExprBind(kont.ExprPerform(echoOp{}), func(a int) kont.Expr[int] {
@@ -743,7 +763,7 @@ func TestRunResubmitError(t *testing.T) {
 	// Run encounters a resubmit error during Poll.
 	d := &testDispatcher{value: 10}
 	b := &failSubmitBackend{dispatch: d.Dispatch, failAt: 2}
-	l := takt.NewLoop[*failSubmitBackend, int](b, 16)
+	l := takt.NewLoop[*failSubmitBackend, int](b, takt.WithMaxCompletions(16))
 
 	m := kont.ExprBind(kont.ExprPerform(echoOp{}), func(a int) kont.Expr[int] {
 		return kont.ExprBind(kont.ExprPerform(echoOp{}), func(b int) kont.Expr[int] {
@@ -763,7 +783,7 @@ func TestRunResubmitError(t *testing.T) {
 func TestRunReturnsBackendPollError(t *testing.T) {
 	pollErr := errors.New("takt_test: poll failed")
 	b := &pollErrorBackend{pollErr: pollErr}
-	l := takt.NewLoop[*pollErrorBackend, int](b, 16)
+	l := takt.NewLoop[*pollErrorBackend, int](b, takt.WithMaxCompletions(16))
 
 	l.SubmitExpr(kont.ExprPerform(echoOp{}))
 
@@ -776,11 +796,40 @@ func TestRunReturnsBackendPollError(t *testing.T) {
 	}
 }
 
+func TestRunReturnsFatalAlongsidePartialResults(t *testing.T) {
+	d := &testDispatcher{value: 10}
+	b := &failSubmitBackend{dispatch: d.Dispatch, failAt: 3}
+	l := takt.NewLoop[*failSubmitBackend, int](b, takt.WithMaxCompletions(16))
+
+	if _, done, err := l.SubmitExpr(kont.ExprPerform(echoOp{})); err != nil || done {
+		t.Fatalf("first SubmitExpr = (_, %v, %v), want suspension", done, err)
+	}
+	m := kont.ExprBind(kont.ExprPerform(echoOp{}), func(a int) kont.Expr[int] {
+		return kont.ExprBind(kont.ExprPerform(echoOp{}), func(b int) kont.Expr[int] {
+			return kont.ExprReturn[int](a + b)
+		})
+	})
+	if _, done, err := l.SubmitExpr(m); err != nil || done {
+		t.Fatalf("second SubmitExpr = (_, %v, %v), want suspension", done, err)
+	}
+
+	results, err := l.Run()
+	if err == nil {
+		t.Fatal("expected fatal error from Run")
+	}
+	if len(results) != 1 || results[0] != 10 {
+		t.Fatalf("results = %#v, want [10]", results)
+	}
+	if l.Failed() == nil {
+		t.Fatal("Failed() = nil, want stored fatal")
+	}
+}
+
 func TestPollUnknownTokenSkipped(t *testing.T) {
 	// Poll with a completion for an unknown token should be silently skipped
 	d := &testDispatcher{value: 42}
 	b := &immediateBackend{dispatch: d.Dispatch}
-	l := takt.NewLoop[*immediateBackend, int](b, 16)
+	l := takt.NewLoop[*immediateBackend, int](b, takt.WithMaxCompletions(16))
 
 	// Submit, then manually clear pending so next poll finds orphan completion
 	l.SubmitExpr(kont.ExprPerform(echoOp{}))
@@ -804,7 +853,7 @@ func TestPollUnknownTokenSkipped(t *testing.T) {
 
 func TestLoopSubmitPureAllocations(t *testing.T) {
 	backend := &benchBackend{}
-	loop := takt.NewLoop[*benchBackend, int](backend, 1)
+	loop := takt.NewLoop[*benchBackend, int](backend, takt.WithMaxCompletions(1))
 	expr := kont.ExprReturn(42)
 
 	allocs := testing.AllocsPerRun(100, func() {
