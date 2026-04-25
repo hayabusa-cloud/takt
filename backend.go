@@ -19,6 +19,8 @@ import (
 )
 
 // Token correlates a submitted operation with its completion.
+// A backend may reuse a token only after the older submission carrying it has
+// retired from the [Loop].
 type Token uint64
 
 // Completion carries token-correlated backend evidence together with an `iox` outcome.
@@ -31,6 +33,8 @@ type Completion struct {
 // Backend is the interface for asynchronous submit/poll execution.
 type Backend[B Backend[B]] interface {
 	// Submit sends an operation and returns a correlation token.
+	// Returned tokens must be unique among all submissions that are still live in
+	// the [Loop]; once a submission has retired, the backend may reuse its token.
 	Submit(op kont.Operation) (Token, error)
 
 	// Poll writes ready completions into `completions` and reports any

@@ -33,9 +33,13 @@ import (
 //     so [WithMaxCompletions] remains a true cap.
 //   - when no size hint is supplied, CompletionBuf must return a non-empty
 //     default slab.
+//   - live slabs must not overlap: a provider must not hand out aliased storage
+//     to two loops (or two live CompletionBuf calls) at the same time.
 //
 // The slice passed to Release must have been obtained from CompletionBuf on the
-// same CompletionMemory and must no longer be aliased by the caller.
+// same CompletionMemory. Release transfers ownership of that slab back to the
+// provider: the caller must stop reading, mutating, or retaining aliases to buf
+// after Release returns.
 type CompletionMemory interface {
 	CompletionBuf(opts ...CompletionBufOption) []Completion
 	Release(buf []Completion)
