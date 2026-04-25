@@ -23,8 +23,15 @@ type Dispatcher[D Dispatcher[D]] interface {
 	Dispatch(op kont.Operation) (kont.Resumed, error)
 }
 
+// ErrLiveTokenReuse reports that a [Backend] reused a token that is still live
+// in the current [Loop]. Reusing a live token would alias two pending
+// frontiers under one correlation key and break token-to-suspension tracking.
+var ErrLiveTokenReuse = errors.New("takt: backend reused a live token")
+
 // ErrUnsupportedMultishot reports that a multishot completion resumed into a
-// new suspended effect that the current [Loop] implementation cannot safely track.
+// new suspended effect that the current [Loop] implementation cannot safely
+// track without breaking token-to-suspension correlation: one live token names
+// one live pending frontier at a time.
 var ErrUnsupportedMultishot = errors.New("takt: multishot completion cannot suspend on a new effect")
 
 // ErrDisposed reports that a Loop has been explicitly disposed via [Loop.Drain]

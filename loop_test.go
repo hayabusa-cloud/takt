@@ -165,6 +165,11 @@ func TestPollCompletionWouldBlockResubmitsOperation(t *testing.T) {
 	if len(results) != 0 {
 		t.Fatalf("got %d results, want 0", len(results))
 	}
+	// WouldBlock re-arms the suspension but remains a no-progress observation,
+	// so Poll reports the idle nil-slice sentinel.
+	if results != nil {
+		t.Fatalf("Poll after completion-WouldBlock resubmit results = %#v, want nil idle sentinel", results)
+	}
 	if l.Pending() != 1 {
 		t.Fatalf("pending %d, want 1", l.Pending())
 	}
@@ -181,6 +186,26 @@ func TestPollCompletionWouldBlockResubmitsOperation(t *testing.T) {
 	}
 	if results[0] != 10 {
 		t.Fatalf("got %d, want 10", results[0])
+	}
+}
+
+func TestRunHandlesCompletionWouldBlockResubmit(t *testing.T) {
+	b := &wouldBlockCompletionBackend{}
+	l := takt.NewLoop[*wouldBlockCompletionBackend, int](b, takt.WithMaxCompletions(16))
+
+	if _, done, err := l.SubmitExpr(kont.ExprPerform(echoOp{})); err != nil || done {
+		t.Fatalf("submit = (_, %v, %v), want pending with nil error", done, err)
+	}
+
+	results, err := l.Run()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(results) != 1 || results[0] != 10 {
+		t.Fatalf("results = %#v, want [10]", results)
+	}
+	if b.attempts != 2 {
+		t.Fatalf("submit attempts = %d, want 2", b.attempts)
 	}
 }
 
@@ -690,6 +715,38 @@ func TestSubmit(t *testing.T) {
 	}
 }
 
+func TestSubmitExprDuplicateLiveTokenPoisonsLoop(t *testing.T) {
+	b := &duplicateTokenBackend{
+		tokens: []takt.Token{1, 1},
+		value:  42,
+	}
+	l := takt.NewLoop[*duplicateTokenBackend, int](b, takt.WithMaxCompletions(16))
+
+	if _, done, err := l.SubmitExpr(kont.ExprPerform(echoOp{})); err != nil || done {
+		t.Fatalf("first submit = (_, %v, %v), want pending with nil error", done, err)
+	}
+
+	result, done, err := l.SubmitExpr(kont.ExprPerform(echoOp{}))
+	if !errors.Is(err, takt.ErrLiveTokenReuse) {
+		t.Fatalf("second submit err = %v, want %v", err, takt.ErrLiveTokenReuse)
+	}
+	if done {
+		t.Fatal("expected fatal error, not completion")
+	}
+	if result != 0 {
+		t.Fatalf("result = %d, want 0", result)
+	}
+	if l.Pending() != 0 {
+		t.Fatalf("pending %d, want 0 after poison", l.Pending())
+	}
+	if !errors.Is(l.Failed(), takt.ErrLiveTokenReuse) {
+		t.Fatalf("Failed() = %v, want %v", l.Failed(), takt.ErrLiveTokenReuse)
+	}
+	if _, pollErr := l.Poll(); !errors.Is(pollErr, takt.ErrLiveTokenReuse) {
+		t.Fatalf("Poll after duplicate err = %v, want %v", pollErr, takt.ErrLiveTokenReuse)
+	}
+}
+
 func TestPollErrMoreMultiStep(t *testing.T) {
 	// ErrMore keeps token: after resume, if computation suspends again,
 	// the token should still map to the new suspension.
@@ -756,6 +813,40 @@ func TestPollErrMoreResuspendReturnsError(t *testing.T) {
 	}
 	if l.Pending() != 0 {
 		t.Fatalf("pending %d, want 0", l.Pending())
+	}
+}
+
+func TestPollResubmitDuplicateLiveTokenPoisonsLoop(t *testing.T) {
+	b := &duplicateTokenBackend{
+		tokens: []takt.Token{1, 2, 2},
+		value:  10,
+	}
+	l := takt.NewLoop[*duplicateTokenBackend, int](b, takt.WithMaxCompletions(1))
+
+	chained := kont.ExprBind(kont.ExprPerform(echoOp{}), func(a int) kont.Expr[int] {
+		return kont.ExprBind(kont.ExprPerform(echoOp{}), func(b int) kont.Expr[int] {
+			return kont.ExprReturn(a + b)
+		})
+	})
+	if _, done, err := l.SubmitExpr(chained); err != nil || done {
+		t.Fatalf("first submit = (_, %v, %v), want pending with nil error", done, err)
+	}
+	if _, done, err := l.SubmitExpr(kont.ExprPerform(echoOp{})); err != nil || done {
+		t.Fatalf("second submit = (_, %v, %v), want pending with nil error", done, err)
+	}
+
+	results, err := l.Poll()
+	if !errors.Is(err, takt.ErrLiveTokenReuse) {
+		t.Fatalf("Poll err = %v, want %v", err, takt.ErrLiveTokenReuse)
+	}
+	if len(results) != 0 {
+		t.Fatalf("got %d results, want 0", len(results))
+	}
+	if l.Pending() != 0 {
+		t.Fatalf("pending %d, want 0 after poison", l.Pending())
+	}
+	if !errors.Is(l.Failed(), takt.ErrLiveTokenReuse) {
+		t.Fatalf("Failed() = %v, want %v", l.Failed(), takt.ErrLiveTokenReuse)
 	}
 }
 

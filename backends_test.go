@@ -239,6 +239,32 @@ func (b *multishotBackend) Poll(completions []takt.Completion) (int, error) {
 	return n, nil
 }
 
+// duplicateTokenBackend returns a caller-provided token schedule so tests can
+// verify that Loop rejects reuse of a still-live token.
+type duplicateTokenBackend struct {
+	tokens []takt.Token
+	next   int
+	value  kont.Resumed
+	ready  []takt.Completion
+}
+
+func (b *duplicateTokenBackend) Submit(op kont.Operation) (takt.Token, error) {
+	tok := b.tokens[b.next]
+	b.next++
+	b.ready = append(b.ready, takt.Completion{
+		Token: tok,
+		Value: b.value,
+		Err:   nil,
+	})
+	return tok, nil
+}
+
+func (b *duplicateTokenBackend) Poll(completions []takt.Completion) (int, error) {
+	n := copy(completions, b.ready)
+	b.ready = b.ready[n:]
+	return n, nil
+}
+
 // recordingMemory records each CompletionBuf and Release call to assert that
 // CompletionMemory is used through NewLoop with WithMemory. Slab allocation is
 // delegated to a private HeapMemory so the option surface is honored without

@@ -24,9 +24,9 @@
 //
 //   - Blocking: [Exec]/[ExecExpr] wait on ErrWouldBlock with adaptive backoff
 //   - Error-aware blocking: [ExecError]/[ExecErrorExpr] return [code.hybscloud.com/kont.Either]
-//   - Stepping with errors: [StepError]/[AdvanceError] preserve the [code.hybscloud.com/kont.Either] result at each step
+//   - Stepping with errors: [StepError]/[AdvanceError] preserve the [code.hybscloud.com/kont.Either] result at each step; [AdvanceSuspension] extends the same contract to contextual suspension carriers such as [code.hybscloud.com/cove.SuspensionView]
 //   - Bridge helpers: [Step] reuses [code.hybscloud.com/kont.StepExpr]; [Reify] and [Reflect] re-export the `kont` conversions so callers do not need a second import
-//   - Lifecycle: [Loop.Failed], [Loop.Drain], and [ErrDisposed] expose the terminal fatal state
+//   - Lifecycle: [Loop.Failed], [Loop.Drain], [ErrDisposed], [ErrLiveTokenReuse], and [ErrUnsupportedMultishot] expose the terminal fatal state
 //
 // # iox Classification
 //
@@ -40,17 +40,26 @@
 // completion classification: poll-level [code.hybscloud.com/iox.ErrWouldBlock]
 // is treated as idle, while completion-level
 // [code.hybscloud.com/iox.ErrWouldBlock] triggers a fresh submission for the
-// same suspension. [Loop.Poll] and [Loop.Run] return
+// same suspension without marking that tick as progress. [Backend.Submit] must
+// return a token that is unique among
+// all submissions still live in the loop; if a backend reuses a live token,
+// [Loop.Poll] and [Loop.Run] surface [ErrLiveTokenReuse] after draining every
+// pending suspension exactly once. [Loop.Poll] and [Loop.Run] return
 // [ErrUnsupportedMultishot] when an [code.hybscloud.com/iox.ErrMore]
 // completion would otherwise resume into a new suspended effect with no
-// backend submission of its own.
+// backend submission of its own. That rejection preserves the loop's
+// token-to-suspension correlation: a multishot lineage may keep resuming the
+// current suspension, but it may not create a fresh pending effect under the
+// old submission.
 //
 // [CompletionMemory] supplies the [Completion] slice that a [Loop] passes to
 // [Backend.Poll]. Use [NewLoop] with [Option]s: [WithMemory] installs a custom
 // provider, [WithMaxCompletions] caps the visible slice length, [HeapMemory] is
 // the default, and [BoundedMemory] provides a single bounded pool of
 // default-sized 128 KiB slabs. [Loop.Drain] releases that slice exactly once
-// through [CompletionMemory.Release].
+// through [CompletionMemory.Release]. Custom providers must hand each live loop
+// an exclusive non-overlapping slab and may treat Release as ownership transfer
+// back to the provider.
 //
 // # Error Handling
 //
@@ -68,6 +77,11 @@
 // Each [AdvanceSuspension] call handles exactly one suspended operation. If
 // resuming that operation produces another suspension, the caller receives it
 // back and decides how to continue.
+//
+// [Loop] stores pending `*kont.Suspension` frontiers produced by
+// [code.hybscloud.com/kont.StepExpr] (or by reifying
+// [code.hybscloud.com/kont.Eff] into Expr form first). This gives the backend
+// one pending suspension per token while that submission remains live.
 //
 // # Execution styles
 //

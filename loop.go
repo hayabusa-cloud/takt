@@ -56,14 +56,17 @@ func newShardedPending[R any]() *shardedPending[R] {
 	return &sp
 }
 
-func (sp *shardedPending[R]) store(tok Token, susp *kont.Suspension[R]) {
+func (sp *shardedPending[R]) store(tok Token, susp *kont.Suspension[R]) bool {
 	shard := &sp[tok%pendingShards]
 	shard.sl.Lock()
-	if _, ok := shard.items[tok]; !ok {
-		shard.size.Add(1)
+	if _, ok := shard.items[tok]; ok {
+		shard.sl.Unlock()
+		return false
 	}
+	shard.size.Add(1)
 	shard.items[tok] = susp
 	shard.sl.Unlock()
+	return true
 }
 
 func (sp *shardedPending[R]) claim(tok Token) (*kont.Suspension[R], bool) {
@@ -108,6 +111,8 @@ func (sp *shardedPending[R]) drainAll() int {
 }
 
 // Loop drives Expr computations through a Backend.
+// It owns pending `*kont.Suspension` frontiers keyed by [Token], so one live
+// token refers to at most one pending suspension at a time.
 type Loop[B Backend[B], R any] struct {
 	backend     B
 	memory      CompletionMemory
@@ -159,6 +164,8 @@ func newCompletionBuf(mem CompletionMemory, maxCompletions int) []Completion {
 
 // SubmitExpr steps a [kont.Expr] computation and transfers its first
 // suspension to the backend.
+// The loop stores the resulting frontier under one token, so later completions
+// are expected to continue that same affine suspension lineage.
 func (l *Loop[B, R]) SubmitExpr(m kont.Expr[R]) (R, bool, error) {
 	if l.fatal != nil {
 		var zero R
@@ -187,14 +194,19 @@ func (l *Loop[B, R]) submit(susp *kont.Suspension[R]) error {
 		susp.Discard()
 		return err
 	}
-	l.pending.store(tok, susp)
+	if !l.pending.store(tok, susp) {
+		susp.Discard()
+		l.poison(ErrLiveTokenReuse)
+		return ErrLiveTokenReuse
+	}
 	return nil
 }
 
 // Poll dispatches ready completions. A resumed suspension either completes or
 // is submitted again under a fresh token. The only unsupported case is a
 // multishot completion (`iox.ErrMore`) that resumes into a new suspended
-// operation; Poll reports [ErrUnsupportedMultishot] for that case.
+// operation; Poll reports [ErrUnsupportedMultishot] for that case because the
+// loop otherwise could not preserve its token-to-suspension correlation.
 //
 // Returns completed results when one or more computations finish in the current
 // poll tick, a zero-length non-nil slice when work advanced without producing a
@@ -208,8 +220,9 @@ func (l *Loop[B, R]) submit(susp *kont.Suspension[R]) error {
 // copy it.
 //
 // When the loop enters a fatal state, whether from an infrastructure poll
-// failure or a completion-driven failure such as [ErrUnsupportedMultishot], it
-// discards every pending suspension exactly once before returning.
+// failure or a completion-driven failure such as [ErrUnsupportedMultishot] or
+// [ErrLiveTokenReuse], it discards every pending suspension exactly once before
+// returning.
 func (l *Loop[B, R]) Poll() ([]R, error) {
 	results, err, _ := l.step()
 	return results, err
@@ -280,7 +293,8 @@ func (l *Loop[B, R]) handleCompletion(c Completion) (resumeResult[R], bool, erro
 	outcome := classifyCompletion(c)
 	if outcome == iox.OutcomeWouldBlock {
 		// Backend ownership ended with the completion token; a failed re-arm
-		// must discard the suspension before returning.
+		// must discard the suspension before returning. WouldBlock remains a
+		// no-progress observation even though the suspension is re-armed.
 		return resumeResult[R]{}, false, l.submit(susp)
 	}
 
