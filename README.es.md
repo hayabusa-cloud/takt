@@ -24,6 +24,10 @@ el backend, correlaciona completaciones por token y reanuda las continuaciones s
 Hay dos API equivalentes: `kont.Eff` (basada en clausuras y fácil de componer) y `kont.Expr` (basada en marcos, con
 menor sobrecarga de asignación en rutas críticas).
 
+La ruta del bucle de eventos guarda una sola suspensión pendiente por cada token vivo. Cada token sigue una suspensión
+producida por `kont.StepExpr` (o por reificar antes `kont.Eff`), por lo que `Backend.Submit` no debe reutilizar un token
+mientras la sumisión anterior que lo porta siga viva en el bucle.
+
 ## Instalación
 
 ```bash
@@ -79,7 +83,7 @@ if susp != nil {
     var err error
     result, susp, err = takt.Advance(d, susp)
     if iox.IsWouldBlock(err) {
-return susp // ceder al bucle de eventos; reprogramar cuando esté listo
+        return susp // ceder al bucle de eventos; reprogramar cuando esté listo
     }
 }
 // result contiene el valor final
@@ -100,7 +104,7 @@ if susp != nil {
     var err error
     either, susp, err = takt.AdvanceError[string](d, susp)
     if iox.IsWouldBlock(err) {
-return susp // ceder al bucle de eventos; reprogramar cuando esté listo
+        return susp // ceder al bucle de eventos; reprogramar cuando esté listo
     }
 }
 ```
@@ -116,10 +120,16 @@ en pánico si `n <= 0` con `takt: WithMaxCompletions requires n > 0`; `WithMemor
 infraestructura del sondeo. La `Loop` trata un `iox.ErrWouldBlock` devuelto por `Poll` como un ciclo en vacío y no como
 un error terminal.
 
+`Backend.Submit` debe devolver un token que sea único entre todas las sumisiones que sigan vivas en el bucle. Si un
+backend reutiliza un token vivo, el bucle registra `ErrLiveTokenReuse`, descarta cada suspensión pendiente exactamente
+una vez y toda llamada posterior a `SubmitExpr` / `Submit` / `Poll` / `Run` devuelve ese error fatal.
+
 Cuando una completación trae `iox.ErrWouldBlock`, el bucle reenvía la misma operación. Si una completación
 `iox.ErrMore` (multishot) tuviera que reanudarse en un nuevo efecto suspendido, el bucle registra
 `ErrUnsupportedMultishot`, descarta cada suspensión pendiente exactamente una vez y toda llamada posterior a
-`SubmitExpr` / `Submit` / `Poll` / `Run` devuelve ese error fatal.
+`SubmitExpr` / `Submit` / `Poll` / `Run` devuelve ese error fatal. Ese rechazo preserva la correlación token-suspensión
+del bucle: un linaje multishot puede seguir reanudando la suspensión actual, pero no crear un nuevo efecto pendiente
+bajo la sumisión anterior.
 
 `Loop.Failed()` reporta el error fatal registrado (o `nil`). `Loop.Drain()` fuerza al bucle al estado desechado,
 descarta toda suspensión pendiente exactamente una vez y registra `ErrDisposed` solo si antes no había un error fatal;
@@ -140,7 +150,9 @@ results, err := loop.Run()
 `NewLoop` usa [`HeapMemory`](completion_memory.go) como proveedor predeterminado del búfer de completaciones. Si quiere
 que esos búferes provengan de un pool acotado y estable de slabs de 128 KiB de tamaño predeterminado, pase [
 `BoundedMemory`](completion_memory.go) mediante [`WithMemory`](option.go); o proporcione cualquier implementación de
-`CompletionMemory` para controlar la estrategia de asignación sin ampliar los contratos de `Backend` ni de `Completion`:
+`CompletionMemory` para controlar la estrategia de asignación sin ampliar los contratos de `Backend` ni de `Completion`.
+Los proveedores personalizados deben devolver slabs vivos exclusivos y no solapados, y pueden tratar `Release` como una
+transferencia de propiedad de vuelta al proveedor:
 
 ```go
 // Por defecto: HeapMemory + slab de completación de tamaño por defecto.
@@ -157,9 +169,9 @@ loopB := takt.NewLoop[*myBackend, int](backend, takt.WithMemory(heap))
 // BoundedMemory: un pool acotado de slabs de 128 KiB con tamaño por defecto. WithPoolCapacity ajusta la capacidad de ese pool (iobuf la redondea a la siguiente potencia de dos).
 bounded := takt.NewBoundedMemory(takt.WithPoolCapacity(4))
 loop = takt.NewLoop[*myBackend, int](
-backend,
-takt.WithMemory(bounded),
-takt.WithMaxCompletions(64),
+    backend,
+    takt.WithMemory(bounded),
+    takt.WithMaxCompletions(64),
 )
 ```
 
@@ -209,6 +221,7 @@ avance con errores
 - `(*Loop[B, R]).Pending() int` — número de operaciones pendientes
 - `(*Loop[B, R]).Failed() error` — error fatal terminal, o nil
 - `(*Loop[B, R]).Drain() int` — descarta suspensiones pendientes y desecha el bucle
+- `ErrLiveTokenReuse` — el backend reutilizó un token que seguía vivo en el bucle
 - `ErrUnsupportedMultishot` — una completación multishot no puede suspenderse en un nuevo efecto
 - `ErrDisposed` — el bucle ha sido desechado mediante `Drain`
 
@@ -227,7 +240,7 @@ proactor) bajo una misma `Loop`:
 type myDispatcher struct{ /* ... */ }
 
 func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-// Devolver (value, nil) al completar o (nil, iox.ErrWouldBlock) para ceder.
+    // Devolver (value, nil) al completar o (nil, iox.ErrWouldBlock) para ceder.
 }
 
 // 2. Definir el backend: envía operaciones al proactor del SO y sondea completaciones.

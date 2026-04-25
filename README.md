@@ -22,6 +22,10 @@ backend, correlates completions by token, and resumes suspended continuations.
 Two equivalent APIs are available: `kont.Eff` (closure-based, straightforward to compose) and `kont.Expr` (frame-based,
 with lower allocation overhead on hot paths).
 
+The event-loop path stores one pending suspension per live token. Each token tracks a suspension produced by
+`kont.StepExpr` (or by reifying `kont.Eff` first), so `Backend.Submit` must not reuse a token while the older submission
+carrying it remains live in the loop.
+
 ## Installation
 
 ```bash
@@ -112,9 +116,15 @@ when `n <= 0` with `takt: WithMaxCompletions requires n > 0`; `WithMemory(nil)` 
 `Backend.Poll([]Completion) (int, error)` reports both the number of ready completions and any infrastructure poll
 failure. `Loop` treats `iox.ErrWouldBlock` returned by `Poll` as an idle tick rather than a terminal error.
 
+`Backend.Submit` must return a token that is unique among all submissions still live in the loop. If a backend reuses a
+live token, the loop records `ErrLiveTokenReuse`, drains every pending suspension exactly once, and every subsequent
+`SubmitExpr` / `Submit` / `Poll` / `Run` call returns that fatal error.
+
 When a completion carries `iox.ErrWouldBlock`, the loop resubmits the same operation. If an `iox.ErrMore` (multishot)
 completion would resume into a new suspended effect, the loop records `ErrUnsupportedMultishot`, drains every pending
 suspension exactly once, and every subsequent `SubmitExpr` / `Submit` / `Poll` / `Run` call returns that fatal error.
+That rejection preserves the loop's token-to-suspension correlation: a multishot lineage may keep resuming the current
+suspension, but it may not create a fresh pending effect under the old submission.
 
 `Loop.Failed()` reports the recorded fatal error (or `nil`). `Loop.Drain()` forces the loop into a disposed state,
 discards every pending suspension exactly once, and records `ErrDisposed` only if no fatal was previously set; it is
@@ -135,7 +145,8 @@ results, err := loop.Run()
 `NewLoop` uses [`HeapMemory`](completion_memory.go) as the default completion-buffer provider. Pass [
 `BoundedMemory`](completion_memory.go) via [`WithMemory`](option.go) when completion buffers should come from a bounded
 steady-state pool of default-sized 128 KiB slabs; or supply a custom `CompletionMemory` implementation to control
-allocation strategy without widening the `Backend` or `Completion` contracts:
+allocation strategy without widening the `Backend` or `Completion` contracts. Custom providers must return exclusive
+non-overlapping live slabs and may treat `Release` as ownership transfer back to the provider:
 
 ```go
 // Default: HeapMemory + default-sized completion slab.
@@ -201,6 +212,7 @@ advance one step with errors
 - `(*Loop[B, R]).Pending() int` — count pending operations
 - `(*Loop[B, R]).Failed() error` — terminal fatal error, or nil
 - `(*Loop[B, R]).Drain() int` — discard pending suspensions and dispose the loop
+- `ErrLiveTokenReuse` — backend reused a token that was still live in the loop
 - `ErrUnsupportedMultishot` — multishot completion cannot suspend on a new effect
 - `ErrDisposed` — loop has been disposed via `Drain`
 

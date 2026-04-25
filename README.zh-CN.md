@@ -19,6 +19,9 @@
 
 提供两套等价 API：`kont.Eff` 基于闭包，组合直接；`kont.Expr` 基于帧，在热路径上具有更低的分配开销。
 
+事件循环路径为每个存活 token 只保存一个挂起。每个 token 跟踪由 `kont.StepExpr` （或先将 `kont.Eff` reify 之后）产生的挂起，因此
+`Backend.Submit` 不能在旧提交仍然存活于循环中时复用该 token。
+
 ## 安装
 
 ```bash
@@ -72,7 +75,7 @@ if susp != nil {
     var err error
     result, susp, err = takt.Advance(d, susp)
     if iox.IsWouldBlock(err) {
-return susp // 将控制权交还给事件循环，待就绪后重新调度
+        return susp // 将控制权交还给事件循环，待就绪后重新调度
     }
 }
 // result 即最终值
@@ -92,7 +95,7 @@ if susp != nil {
     var err error
     either, susp, err = takt.AdvanceError[string](d, susp)
     if iox.IsWouldBlock(err) {
-return susp // 将控制权交还给事件循环，待就绪后重新调度
+        return susp // 将控制权交还给事件循环，待就绪后重新调度
     }
 }
 ```
@@ -106,8 +109,12 @@ return susp // 将控制权交还给事件循环，待就绪后重新调度
 `Backend.Poll([]Completion) (int, error)` 同时报告就绪完成事件的数量以及基础设施层面的轮询失败。`Loop` 会把 `Poll` 返回的
 `iox.ErrWouldBlock` 视为空闲轮询，而不是终止性错误。
 
+`Backend.Submit` 必须在循环中所有仍然存活的提交之间返回唯一 token。如果后端复用了一个存活 token，循环会记录
+`ErrLiveTokenReuse`，将所有挂起恰好丢弃一次，并使后续所有 `SubmitExpr` / `Submit` / `Poll` / `Run` 调用都返回该致命错误。
+
 当完成事件携带 `iox.ErrWouldBlock` 时，循环会重新提交同一操作。如果 `iox.ErrMore`（多次触发）完成事件将恢复到一个新的挂起效果，循环会记录
 `ErrUnsupportedMultishot`，将所有挂起恰好丢弃一次，并使后续所有 `SubmitExpr` / `Submit` / `Poll` / `Run` 调用都返回该致命错误。
+这一拒绝维持了循环的 token 到挂起的关联：多次触发的谱系可以继续恢复当前挂起，但不能在旧提交之下创建新的待处理效果。
 
 `Loop.Failed()` 报告已记录的致命错误（或 `nil`）。`Loop.Drain()` 会强制循环进入已废弃状态，恰好一次地丢弃所有挂起，仅在尚未设置致命错误时记录
 `ErrDisposed`；该方法幂等，并保留任何既有的致命错误。
@@ -126,7 +133,8 @@ results, err := loop.Run()
 
 `NewLoop` 默认使用 [`HeapMemory`](completion_memory.go) 作为完成事件缓冲区的提供器。如果希望这些缓冲区来自一个保存默认尺寸
 128 KiB slab 的有界稳态池，可以通过 [`WithMemory`](option.go) 传入 [`BoundedMemory`](completion_memory.go)；也可以实现自定义
-`CompletionMemory`，在不扩展 `Backend` 与 `Completion` 契约的前提下控制分配策略：
+`CompletionMemory`，在不扩展 `Backend` 与 `Completion` 契约的前提下控制分配策略。自定义提供器必须返回彼此独占且不重叠的存活
+slab，并且可以把 `Release` 视为所有权回交给提供器：
 
 ```go
 // 默认：HeapMemory + 默认尺寸完成事件缓冲区。
@@ -143,9 +151,9 @@ loopB := takt.NewLoop[*myBackend, int](backend, takt.WithMemory(heap))
 // BoundedMemory：一个有界池，保存默认尺寸 128 KiB 的 slab。WithPoolCapacity 用于调整该池容量（iobuf 会向上取整到最近的 2 的幂）。
 bounded := takt.NewBoundedMemory(takt.WithPoolCapacity(4))
 loop = takt.NewLoop[*myBackend, int](
-backend,
-takt.WithMemory(bounded),
-takt.WithMaxCompletions(64),
+    backend,
+    takt.WithMemory(bounded),
+    takt.WithMaxCompletions(64),
 )
 ```
 
@@ -192,6 +200,7 @@ takt.WithMaxCompletions(64),
 - `(*Loop[B, R]).Pending() int` — 待处理操作数
 - `(*Loop[B, R]).Failed() error` — 终端致命错误；未发生时为 nil
 - `(*Loop[B, R]).Drain() int` — 丢弃挂起并废弃循环
+- `ErrLiveTokenReuse` — 后端复用了一个在循环中仍然存活的 token
 - `ErrUnsupportedMultishot` — 多次触发完成不能挂起到新的效果
 - `ErrDisposed` — 循环已通过 `Drain` 废弃
 
@@ -209,7 +218,7 @@ takt.WithMaxCompletions(64),
 type myDispatcher struct{ /* ... */ }
 
 func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-// 完成时返回 (value, nil)，需要让出时返回 (nil, iox.ErrWouldBlock)。
+    // 完成时返回 (value, nil)，需要让出时返回 (nil, iox.ErrWouldBlock)。
 }
 
 // 2. 定义 backend：将操作提交到 OS proactor，并轮询完成事件。
