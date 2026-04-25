@@ -55,7 +55,7 @@ Go 1.26 以降が必要です。
 type myDispatcher struct{ /* ... */ }
 
 func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-// op をディスパッチし、(value, nil) または (nil, iox.ErrWouldBlock) を返す
+    // op をディスパッチし、(value, nil) または (nil, iox.ErrWouldBlock) を返す
 }
 ```
 
@@ -114,15 +114,18 @@ if susp != nil {
 `Backend.Poll([]Completion) (int, error)` は、準備済み完了件数とインフラストラクチャのポーリング失敗の両方を報告します。
 `Loop` は `Poll` から返る `iox.ErrWouldBlock` を終端エラーではなくアイドルティックとして扱います。
 
+`Loop` は単一所有者の runner です。同じ `Loop` を共有する `SubmitExpr`, `Submit`, `Poll`, `Run`, `Drain`, `Pending`,
+`Failed` の呼び出しは直列化してください。
+
 `Backend.Submit` は、ループ内でまだ生存しているすべての送信の間で一意なトークンを返さなければなりません。バックエンドが生存中トークンを再利用した場合、ループは
 `ErrLiveTokenReuse` を記録し、すべての保留サスペンションをちょうど一度だけ破棄し、その後の `SubmitExpr` / `Submit` /
 `Poll` / `Run` はこの致命的エラーを返します。
 
-完了が `iox.ErrWouldBlock` を伴う場合、ループは同じ操作を再送信します。`iox.ErrMore`
-（マルチショット）完了が新しいサスペンドされたエフェクトに再開しようとする場合、ループは `ErrUnsupportedMultishot`
-を記録し、保留中のサスペンションをそれぞれ一度だけ破棄し、以降の `SubmitExpr` / `Submit` / `Poll` / `Run`
-呼び出しはその致命的エラーを返します。
-この拒否はループのトークンとサスペンションの対応を保ちます。マルチショット系列は現在のサスペンションを再開し続けられても、以前の送信の下で新しい保留エフェクトを作ることはできません。
+完了が `iox.ErrWouldBlock` を伴う場合、ループは同じ操作を再送信します。完了が `iox.ErrMore`
+（マルチショット）を伴う場合、ループは `ErrUnsupportedMultishot` を記録し、保留中のサスペンションをそれぞれ一度だけ破棄し、以降の
+`SubmitExpr` / `Submit` / `Poll` / `Run` 呼び出しはその致命的エラーを返します。
+`ErrMore` は CQE 後も送信済みのバックエンド操作が生存していることを意味しますが、汎用 `Loop`
+には同一トークンの後続完了を所有する購読/キャンセルのキャリアがありません。
 
 `Loop.Failed()` は記録された致命的エラー（または `nil`）を返します。`Loop.Drain()`
 はループを廃棄状態へ強制し、保留中のサスペンションをそれぞれ一度だけ破棄し、致命的エラーが未設定の場合に限って
@@ -212,7 +215,7 @@ loop = takt.NewLoop[*myBackend, int](
 - `(*Loop[B, R]).Failed() error` — 終端致命エラー。未発生時は nil
 - `(*Loop[B, R]).Drain() int` — 保留中のサスペンションを破棄してループを廃棄する
 - `ErrLiveTokenReuse` — バックエンドがループ内でまだ生存しているトークンを再利用したことを示す
-- `ErrUnsupportedMultishot` — マルチショット完了が新しいエフェクトでサスペンドできない
+- `ErrUnsupportedMultishot` — 汎用 `Loop` はマルチショット完了をサポートしない
 - `ErrDisposed` — `Drain` によりループが廃棄されたことを示す
 
 ### ブリッジ

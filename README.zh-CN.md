@@ -51,7 +51,7 @@ go get code.hybscloud.com/takt
 type myDispatcher struct{ /* ... */ }
 
 func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-// 派发 op，并返回 (value, nil) 或 (nil, iox.ErrWouldBlock)
+    // 派发 op，并返回 (value, nil) 或 (nil, iox.ErrWouldBlock)
 }
 ```
 
@@ -109,12 +109,15 @@ if susp != nil {
 `Backend.Poll([]Completion) (int, error)` 同时报告就绪完成事件的数量以及基础设施层面的轮询失败。`Loop` 会把 `Poll` 返回的
 `iox.ErrWouldBlock` 视为空闲轮询，而不是终止性错误。
 
+`Loop` 是单所有者 runner。共享同一个 `Loop` 的调用必须串行化，包括 `SubmitExpr`、`Submit`、`Poll`、`Run`、`Drain`、`Pending` 和
+`Failed`。
+
 `Backend.Submit` 必须在循环中所有仍然存活的提交之间返回唯一 token。如果后端复用了一个存活 token，循环会记录
 `ErrLiveTokenReuse`，将所有挂起恰好丢弃一次，并使后续所有 `SubmitExpr` / `Submit` / `Poll` / `Run` 调用都返回该致命错误。
 
-当完成事件携带 `iox.ErrWouldBlock` 时，循环会重新提交同一操作。如果 `iox.ErrMore`（多次触发）完成事件将恢复到一个新的挂起效果，循环会记录
+当完成事件携带 `iox.ErrWouldBlock` 时，循环会重新提交同一操作。如果完成事件携带 `iox.ErrMore`（多次触发），循环会记录
 `ErrUnsupportedMultishot`，将所有挂起恰好丢弃一次，并使后续所有 `SubmitExpr` / `Submit` / `Poll` / `Run` 调用都返回该致命错误。
-这一拒绝维持了循环的 token 到挂起的关联：多次触发的谱系可以继续恢复当前挂起，但不能在旧提交之下创建新的待处理效果。
+`ErrMore` 表示提交的后端操作在 CQE 之后仍然存活，而通用 `Loop` 没有用于后续同 token 完成事件的订阅/取消载体。
 
 `Loop.Failed()` 报告已记录的致命错误（或 `nil`）。`Loop.Drain()` 会强制循环进入已废弃状态，恰好一次地丢弃所有挂起，仅在尚未设置致命错误时记录
 `ErrDisposed`；该方法幂等，并保留任何既有的致命错误。
@@ -201,7 +204,7 @@ loop = takt.NewLoop[*myBackend, int](
 - `(*Loop[B, R]).Failed() error` — 终端致命错误；未发生时为 nil
 - `(*Loop[B, R]).Drain() int` — 丢弃挂起并废弃循环
 - `ErrLiveTokenReuse` — 后端复用了一个在循环中仍然存活的 token
-- `ErrUnsupportedMultishot` — 多次触发完成不能挂起到新的效果
+- `ErrUnsupportedMultishot` — 通用 `Loop` 不支持多次触发完成
 - `ErrDisposed` — 循环已通过 `Drain` 废弃
 
 ### 桥接
