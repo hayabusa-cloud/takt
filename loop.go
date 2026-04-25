@@ -113,6 +113,10 @@ func (sp *shardedPending[R]) drainAll() int {
 // Loop drives Expr computations through a Backend.
 // It owns pending `*kont.Suspension` frontiers keyed by [Token], so one live
 // token refers to at most one pending suspension at a time.
+//
+// Loop is not safe for concurrent use. Callers must serialize methods that
+// share a Loop instance, including SubmitExpr, Submit, Poll, Run, Drain,
+// Pending, and Failed.
 type Loop[B Backend[B], R any] struct {
 	backend     B
 	memory      CompletionMemory
@@ -203,10 +207,11 @@ func (l *Loop[B, R]) submit(susp *kont.Suspension[R]) error {
 }
 
 // Poll dispatches ready completions. A resumed suspension either completes or
-// is submitted again under a fresh token. The only unsupported case is a
-// multishot completion (`iox.ErrMore`) that resumes into a new suspended
-// operation; Poll reports [ErrUnsupportedMultishot] for that case because the
-// loop otherwise could not preserve its token-to-suspension correlation.
+// is submitted again under a fresh token. Multishot completions (`iox.ErrMore`)
+// are rejected because the same backend submission remains active after the CQE,
+// while Loop only tracks one affine suspension per submitted operation. Concrete
+// runtimes that need multishot streams should own a subscription/cancel carrier
+// above this generic Loop.
 //
 // Returns completed results when one or more computations finish in the current
 // poll tick, a zero-length non-nil slice when work advanced without producing a
@@ -297,21 +302,20 @@ func (l *Loop[B, R]) handleCompletion(c Completion) (resumeResult[R], bool, erro
 		// no-progress observation even though the suspension is re-armed.
 		return resumeResult[R]{}, false, l.submit(susp)
 	}
+	if outcome == iox.OutcomeMore {
+		// ErrMore says the submitted backend operation is still live. Generic
+		// Loop has no subscription/cancel carrier for that active operation, so
+		// consuming the one-shot suspension would either leak future CQEs or
+		// retarget them to an unsubmitted successor effect.
+		susp.Discard()
+		return resumeResult[R]{}, true, ErrUnsupportedMultishot
+	}
 
 	result, next := susp.Resume(c.Value)
 
-	// OutcomeWouldBlock is handled above; only OK, More, and Failure remain.
+	// OutcomeWouldBlock and OutcomeMore are handled above; only OK and Failure remain.
 	// OutcomeOK and OutcomeFailure follow the same resume path because the
 	// backend already encodes the operation result in Completion.Value.
-	if outcome == iox.OutcomeMore {
-		// The same backend submission remains live. This is only supported
-		// when resuming does not produce a fresh suspended operation.
-		if next == nil {
-			return resumeResult[R]{done: true, result: result}, true, nil
-		}
-		next.Discard()
-		return resumeResult[R]{}, true, ErrUnsupportedMultishot
-	}
 	if next == nil {
 		return resumeResult[R]{done: true, result: result}, true, nil
 	}
@@ -324,7 +328,7 @@ func (l *Loop[B, R]) Pending() int {
 }
 
 // Failed returns the loop's terminal fatal error, if any. A non-nil result
-// means every subsequent SubmitExpr, Submit, or Poll call returns the same
+// means every subsequent SubmitExpr, Submit, Poll, or Run call returns the same
 // error and all previously pending suspensions have been discarded exactly once.
 func (l *Loop[B, R]) Failed() error {
 	return l.fatal

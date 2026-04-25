@@ -28,11 +28,11 @@ type Dispatcher[D Dispatcher[D]] interface {
 // frontiers under one correlation key and break token-to-suspension tracking.
 var ErrLiveTokenReuse = errors.New("takt: backend reused a live token")
 
-// ErrUnsupportedMultishot reports that a multishot completion resumed into a
-// new suspended effect that the current [Loop] implementation cannot safely
-// track without breaking token-to-suspension correlation: one live token names
-// one live pending frontier at a time.
-var ErrUnsupportedMultishot = errors.New("takt: multishot completion cannot suspend on a new effect")
+// ErrUnsupportedMultishot reports that a backend produced a multishot
+// completion for [Loop]. ErrMore means the submitted backend operation remains
+// active after the CQE; generic Loop tracks affine one-shot suspensions and has
+// no subscription/cancel carrier for later same-token completions.
+var ErrUnsupportedMultishot = errors.New("takt: unsupported multishot completion")
 
 // ErrDisposed reports that a Loop has been explicitly disposed via [Loop.Drain]
 // and can no longer accept submissions or produce completions.

@@ -45,12 +45,11 @@
 // all submissions still live in the loop; if a backend reuses a live token,
 // [Loop.Poll] and [Loop.Run] surface [ErrLiveTokenReuse] after draining every
 // pending suspension exactly once. [Loop.Poll] and [Loop.Run] return
-// [ErrUnsupportedMultishot] when an [code.hybscloud.com/iox.ErrMore]
-// completion would otherwise resume into a new suspended effect with no
-// backend submission of its own. That rejection preserves the loop's
-// token-to-suspension correlation: a multishot lineage may keep resuming the
-// current suspension, but it may not create a fresh pending effect under the
-// old submission.
+// [ErrUnsupportedMultishot] for completion-level [code.hybscloud.com/iox.ErrMore]:
+// the CQE is usable, but the submitted backend operation remains active and may
+// produce later same-token completions. Generic [Loop] has no
+// subscription/cancel carrier for that still-live operation, so multishot
+// stream ownership belongs in a concrete layer above takt.
 //
 // [CompletionMemory] supplies the [Completion] slice that a [Loop] passes to
 // [Backend.Poll]. Use [NewLoop] with [Option]s: [WithMemory] installs a custom
@@ -82,6 +81,11 @@
 // [code.hybscloud.com/kont.StepExpr] (or by reifying
 // [code.hybscloud.com/kont.Eff] into Expr form first). This gives the backend
 // one pending suspension per token while that submission remains live.
+//
+// [Loop] instances are single-owner runners: callers must serialize SubmitExpr,
+// Submit, Poll, Run, Drain, Pending, and Failed calls on the same loop. The
+// internal pending map uses sharding for token lookup, not as a public
+// concurrent-use guarantee.
 //
 // # Execution styles
 //
