@@ -26,7 +26,7 @@
 //   - Error-aware blocking: [ExecError]/[ExecErrorExpr] return [code.hybscloud.com/kont.Either]
 //   - Stepping with errors: [StepError]/[AdvanceError] preserve the [code.hybscloud.com/kont.Either] result at each step; [AdvanceSuspension] extends the same contract to contextual suspension carriers such as [code.hybscloud.com/cove.SuspensionView]
 //   - Bridge helpers: [Step] reuses [code.hybscloud.com/kont.StepExpr]; [Reify] and [Reflect] re-export the `kont` conversions so callers do not need a second import
-//   - Lifecycle: [Loop.Failed], [Loop.Drain], [ErrDisposed], and [ErrLiveTokenReuse] expose the terminal fatal state
+//   - Lifecycle: [Loop.Failed], [Loop.Drain], [ErrDisposed], [ErrLiveTokenReuse], and [ErrUnsupportedMultishot] expose the terminal fatal state
 //
 // # iox Classification
 //
