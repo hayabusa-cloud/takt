@@ -144,8 +144,8 @@ results, err := loop.Run()
 ```
 
 `NewLoop` は完了バッファの既定プロバイダとして [`HeapMemory`](completion_memory.go) を使います。完了バッファを既定サイズ
-128 KiB の slab から成る有界かつ安定したプールから取得したい場合は、[`WithMemory`](option.go) で [
-`BoundedMemory`](completion_memory.go) を渡してください。あるいは、`Backend` や `Completion` の契約を広げずに割り当て戦略を制御したい場合は、独自の
+128 KiB の slab から成る有界かつ安定したプールから取得したい場合は、[`WithMemory`](option.go) で
+[`BoundedMemory`](completion_memory.go) を渡してください。あるいは、`Backend` や `Completion` の契約を広げずに割り当て戦略を制御したい場合は、独自の
 `CompletionMemory` を実装してください。カスタムプロバイダは、生存中 slab を他と重ならない排他的なものとして返し、`Release`
 をプロバイダ側への所有権移譲として扱ってかまいません:
 
