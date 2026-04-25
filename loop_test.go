@@ -86,11 +86,10 @@ func TestPollDispatchesCompletion(t *testing.T) {
 	}
 }
 
-func TestPollErrMoreKeepsToken(t *testing.T) {
+func TestPollErrMoreCompletionRejected(t *testing.T) {
 	b := &errMoreBackend{}
 	l := takt.NewLoop[*errMoreBackend, int](b, takt.WithMaxCompletions(16))
 
-	// Multi-step: first effect gets ErrMore completion
 	m := kont.ExprBind(kont.ExprPerform(echoOp{}), func(a int) kont.Expr[int] {
 		return kont.ExprReturn[int](a + 5)
 	})
@@ -99,16 +98,36 @@ func TestPollErrMoreKeepsToken(t *testing.T) {
 		t.Fatalf("pending %d, want 1", l.Pending())
 	}
 
-	// Poll: ErrMore completion resumes, computation completes (a+5=15)
 	results, err := l.Poll()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, takt.ErrUnsupportedMultishot) {
+		t.Fatalf("err = %v, want %v", err, takt.ErrUnsupportedMultishot)
 	}
-	if len(results) != 1 {
-		t.Fatalf("got %d results, want 1", len(results))
+	if len(results) != 0 {
+		t.Fatalf("got %d results, want 0", len(results))
 	}
-	if results[0] != 15 {
-		t.Fatalf("got %d, want 15", results[0])
+	if l.Pending() != 0 {
+		t.Fatalf("pending %d, want 0", l.Pending())
+	}
+	if !errors.Is(l.Failed(), takt.ErrUnsupportedMultishot) {
+		t.Fatalf("Failed() = %v, want %v", l.Failed(), takt.ErrUnsupportedMultishot)
+	}
+}
+
+func TestPollErrMoreRejectedBeforeResume(t *testing.T) {
+	b := &invalidErrMoreBackend{}
+	l := takt.NewLoop[*invalidErrMoreBackend, int](b, takt.WithMaxCompletions(16))
+
+	l.SubmitExpr(kont.ExprPerform(echoOp{}))
+
+	results, err := l.Poll()
+	if !errors.Is(err, takt.ErrUnsupportedMultishot) {
+		t.Fatalf("err = %v, want %v", err, takt.ErrUnsupportedMultishot)
+	}
+	if len(results) != 0 {
+		t.Fatalf("got %d results, want 0", len(results))
+	}
+	if l.Pending() != 0 {
+		t.Fatalf("pending %d, want 0", l.Pending())
 	}
 }
 
@@ -747,24 +766,18 @@ func TestSubmitExprDuplicateLiveTokenPoisonsLoop(t *testing.T) {
 	}
 }
 
-func TestPollErrMoreMultiStep(t *testing.T) {
-	// ErrMore keeps token: after resume, if computation suspends again,
-	// the token should still map to the new suspension.
+func TestRunErrMoreCompletionRejected(t *testing.T) {
 	b := &errMoreBackend{}
 	l := takt.NewLoop[*errMoreBackend, int](b, takt.WithMaxCompletions(16))
 
-	// Single effect computation: ErrMore resume → immediate completion
 	l.SubmitExpr(kont.ExprPerform(echoOp{}))
 
 	results, err := l.Run()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, takt.ErrUnsupportedMultishot) {
+		t.Fatalf("err = %v, want %v", err, takt.ErrUnsupportedMultishot)
 	}
-	if len(results) != 1 {
-		t.Fatalf("got %d results, want 1", len(results))
-	}
-	if results[0] != 10 {
-		t.Fatalf("got %d, want 10", results[0])
+	if len(results) != 0 {
+		t.Fatalf("got %d results, want 0", len(results))
 	}
 }
 
@@ -786,13 +799,12 @@ func TestSubmitPure(t *testing.T) {
 }
 
 func TestPollErrMoreResuspendReturnsError(t *testing.T) {
-	// ErrMore completion resumes, but computation suspends again on next effect.
-	// The current Loop implementation cannot safely track both the live
-	// multishot source and a new submitted effect under one correlation token.
+	// ErrMore says the submitted backend operation remains active. Generic Loop
+	// rejects it before resuming the one-shot suspension, including when the
+	// continuation would otherwise suspend on a later effect.
 	b := &multishotBackend{}
 	l := takt.NewLoop[*multishotBackend, int](b, takt.WithMaxCompletions(1)) // maxCompletions=1 so we poll one completion at a time
 
-	// Two effects chained: first gets ErrMore, resume yields second effect
 	m := kont.ExprBind(kont.ExprPerform(echoOp{}), func(a int) kont.Expr[int] {
 		return kont.ExprBind(kont.ExprPerform(echoOp{}), func(b int) kont.Expr[int] {
 			return kont.ExprReturn[int](a + b)
@@ -803,7 +815,6 @@ func TestPollErrMoreResuspendReturnsError(t *testing.T) {
 		t.Fatalf("pending %d, want 1", l.Pending())
 	}
 
-	// First poll (maxCompletions=1): ErrMore resume → second effect suspends → token kept
 	results, err := l.Poll()
 	if !errors.Is(err, takt.ErrUnsupportedMultishot) {
 		t.Fatalf("err = %v, want %v", err, takt.ErrUnsupportedMultishot)

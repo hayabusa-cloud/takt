@@ -72,7 +72,8 @@ func (b *failSubmitBackend) Poll(completions []takt.Completion) (int, error) {
 	return n, nil
 }
 
-// errMoreBackend marks each completion with iox.ErrMore.
+// errMoreBackend marks each completion with iox.ErrMore, which generic Loop
+// rejects because the submitted operation remains active after the CQE.
 type errMoreBackend struct {
 	nextTok takt.Token
 	ready   []takt.Completion
@@ -92,6 +93,30 @@ func (b *errMoreBackend) Submit(op kont.Operation) (takt.Token, error) {
 }
 
 func (b *errMoreBackend) Poll(completions []takt.Completion) (int, error) {
+	n := copy(completions, b.ready)
+	b.ready = b.ready[n:]
+	return n, nil
+}
+
+// invalidErrMoreBackend emits an ErrMore completion with a value that would
+// panic if the suspended computation were resumed.
+type invalidErrMoreBackend struct {
+	nextTok takt.Token
+	ready   []takt.Completion
+}
+
+func (b *invalidErrMoreBackend) Submit(op kont.Operation) (takt.Token, error) {
+	tok := b.nextTok
+	b.nextTok++
+	b.ready = append(b.ready, takt.Completion{
+		Token: tok,
+		Value: struct{}{},
+		Err:   iox.ErrMore,
+	})
+	return tok, nil
+}
+
+func (b *invalidErrMoreBackend) Poll(completions []takt.Completion) (int, error) {
 	n := copy(completions, b.ready)
 	b.ready = b.ready[n:]
 	return n, nil
@@ -217,7 +242,7 @@ func (b *observingBackend) Poll(completions []takt.Completion) (int, error) {
 // multishotBackend reports two completions on the same token to simulate a
 // multishot source: an iox.ErrMore intermediate completion followed by a
 // terminal nil. With maxCompletions=1, only the first completion surfaces per
-// poll, exercising the same-token continuation path.
+// poll, exercising the unsupported generic Loop boundary.
 type multishotBackend struct {
 	nextTok takt.Token
 	ready   []takt.Completion
