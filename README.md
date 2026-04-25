@@ -116,15 +116,18 @@ when `n <= 0` with `takt: WithMaxCompletions requires n > 0`; `WithMemory(nil)` 
 `Backend.Poll([]Completion) (int, error)` reports both the number of ready completions and any infrastructure poll
 failure. `Loop` treats `iox.ErrWouldBlock` returned by `Poll` as an idle tick rather than a terminal error.
 
+`Loop` is a single-owner runner. Serialize calls that share the same `Loop`, including `SubmitExpr`, `Submit`, `Poll`,
+`Run`, `Drain`, `Pending`, and `Failed`.
+
 `Backend.Submit` must return a token that is unique among all submissions still live in the loop. If a backend reuses a
 live token, the loop records `ErrLiveTokenReuse`, drains every pending suspension exactly once, and every subsequent
 `SubmitExpr` / `Submit` / `Poll` / `Run` call returns that fatal error.
 
-When a completion carries `iox.ErrWouldBlock`, the loop resubmits the same operation. If an `iox.ErrMore` (multishot)
-completion would resume into a new suspended effect, the loop records `ErrUnsupportedMultishot`, drains every pending
-suspension exactly once, and every subsequent `SubmitExpr` / `Submit` / `Poll` / `Run` call returns that fatal error.
-That rejection preserves the loop's token-to-suspension correlation: a multishot lineage may keep resuming the current
-suspension, but it may not create a fresh pending effect under the old submission.
+When a completion carries `iox.ErrWouldBlock`, the loop resubmits the same operation. If a completion carries
+`iox.ErrMore` (multishot), the loop records `ErrUnsupportedMultishot`, drains every pending suspension exactly once, and
+every subsequent `SubmitExpr` / `Submit` / `Poll` / `Run` call returns that fatal error. `ErrMore` means the submitted
+backend operation remains active after the CQE, while generic `Loop` has no subscription/cancel carrier for later
+same-token completions.
 
 `Loop.Failed()` reports the recorded fatal error (or `nil`). `Loop.Drain()` forces the loop into a disposed state,
 discards every pending suspension exactly once, and records `ErrDisposed` only if no fatal was previously set; it is
@@ -213,7 +216,7 @@ advance one step with errors
 - `(*Loop[B, R]).Failed() error` — terminal fatal error, or nil
 - `(*Loop[B, R]).Drain() int` — discard pending suspensions and dispose the loop
 - `ErrLiveTokenReuse` — backend reused a token that was still live in the loop
-- `ErrUnsupportedMultishot` — multishot completion cannot suspend on a new effect
+- `ErrUnsupportedMultishot` — multishot completion is unsupported by generic `Loop`
 - `ErrDisposed` — loop has been disposed via `Drain`
 
 ### Bridge

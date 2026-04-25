@@ -58,7 +58,7 @@ Un `Dispatcher` associe chaque effet algébrique à une opération d'E/S concrè
 type myDispatcher struct{ /* ... */ }
 
 func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-// dispatcher op, renvoyer (value, nil) ou (nil, iox.ErrWouldBlock)
+    // dispatcher op, renvoyer (value, nil) ou (nil, iox.ErrWouldBlock)
 }
 ```
 
@@ -121,16 +121,18 @@ panique si `n <= 0` avec `takt: WithMaxCompletions requires n > 0` ; `WithMemory
 d'infrastructure de sondage. La `Loop` traite un `iox.ErrWouldBlock` renvoyé par `Poll` comme un tour à vide plutôt que
 comme une erreur terminale.
 
+`Loop` est un runner à propriétaire unique. Sérialisez les appels qui partagent la même `Loop`, notamment `SubmitExpr`,
+`Submit`, `Poll`, `Run`, `Drain`, `Pending` et `Failed`.
+
 `Backend.Submit` doit renvoyer un jeton unique parmi toutes les soumissions encore vivantes dans la boucle. Si un
 backend réutilise un jeton vivant, la boucle enregistre `ErrLiveTokenReuse`, rejette chaque suspension pendante
 exactement une fois, puis tout appel ultérieur à `SubmitExpr` / `Submit` / `Poll` / `Run` renvoie cette erreur fatale.
 
-Lorsqu'une complétion porte `iox.ErrWouldBlock`, la boucle resoumet la même opération. Si une complétion `iox.ErrMore` (
-multishot) devait reprendre dans un nouvel effet suspendu, la boucle enregistre `ErrUnsupportedMultishot`, rejette
-chaque suspension pendante exactement une fois, et tout appel ultérieur à `SubmitExpr` / `Submit` / `Poll` / `Run`
-renvoie cette erreur fatale. Ce rejet préserve la corrélation jeton-suspension de la boucle : une lignée multishot peut
-continuer à reprendre la suspension courante, mais elle ne peut pas créer un nouvel effet pendant sous l'ancienne
-soumission.
+Lorsqu'une complétion porte `iox.ErrWouldBlock`, la boucle resoumet la même opération. Si une complétion porte
+`iox.ErrMore` (multishot), la boucle enregistre `ErrUnsupportedMultishot`, rejette chaque suspension pendante exactement
+une fois, et tout appel ultérieur à `SubmitExpr` / `Submit` / `Poll` / `Run` renvoie cette erreur fatale. `ErrMore`
+signifie que l'opération backend soumise reste active après la CQE, tandis que la `Loop` générique n'a pas de porteur
+d'abonnement/annulation pour les complétions ultérieures du même jeton.
 
 `Loop.Failed()` renvoie l'erreur fatale enregistrée (ou `nil`). `Loop.Drain()` force la boucle dans l'état disposé,
 rejette chaque suspension pendante exactement une fois et n'enregistre `ErrDisposed` que si aucune erreur fatale n'était
@@ -221,7 +223,7 @@ avancée avec erreurs
 - `(*Loop[B, R]).Failed() error` — erreur fatale terminale, ou nil
 - `(*Loop[B, R]).Drain() int` — abandonne les suspensions en attente et dispose la boucle
 - `ErrLiveTokenReuse` — le backend a réutilisé un jeton encore vivant dans la boucle
-- `ErrUnsupportedMultishot` — une complétion multishot ne peut pas suspendre sur un nouvel effet
+- `ErrUnsupportedMultishot` — une complétion multishot n'est pas prise en charge par la `Loop` générique
 - `ErrDisposed` — la boucle a été disposée via `Drain`
 
 ### Pont
@@ -231,8 +233,8 @@ avancée avec erreurs
 
 ## Schémas pratiques
 
-Une intégration complète à une boucle d'événements combine un `Dispatcher` (la sémantique synchrone) avec un `Backend` (
-le proactor) sous une même `Loop` :
+Une intégration complète à une boucle d'événements combine un `Dispatcher` (la sémantique synchrone) avec un `Backend`
+(le proactor) sous une même `Loop` :
 
 ```go
 // 1. Définir le dispatcher : associe une opération d'effet à un résultat iox.

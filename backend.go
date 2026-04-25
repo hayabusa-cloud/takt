@@ -23,7 +23,9 @@ import (
 // retired from the [Loop].
 type Token uint64
 
-// Completion carries token-correlated backend evidence together with an `iox` outcome.
+// Completion carries token-correlated backend evidence together with an `iox`
+// outcome. Value is valid resumption input for the correlated suspension even
+// when Err reports an infrastructure failure.
 type Completion struct {
 	Token Token
 	Value kont.Resumed
@@ -37,7 +39,9 @@ type Backend[B Backend[B]] interface {
 	// the [Loop]; once a submission has retired, the backend may reuse its token.
 	Submit(op kont.Operation) (Token, error)
 
-	// Poll writes ready completions into `completions` and reports any
-	// infrastructure wait failure.
+	// Poll writes ready completions into completions and reports any
+	// infrastructure wait failure. Per-completion outcomes are reported in
+	// [Completion.Err]; poll-level errors are reserved for failures of the
+	// polling operation itself.
 	Poll(completions []Completion) (int, error)
 }
