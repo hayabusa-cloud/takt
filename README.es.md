@@ -117,7 +117,7 @@ en pánico si `n <= 0` con `takt: WithMaxCompletions requires n > 0`; `WithMemor
 `takt: WithMemory requires a non-nil CompletionMemory`.
 
 `Backend.Poll([]Completion) (int, error)` informa tanto el número de finalizaciones listas como cualquier fallo de
-infraestructura del sondeo. La `Loop` trata un `iox.ErrWouldBlock` devuelto por `Poll` como un ciclo en vacío y no como
+infraestructura del sondeo. El `Loop` trata un `iox.ErrWouldBlock` devuelto por `Poll` como un ciclo en vacío y no como
 un error terminal.
 
 `Loop` es un runner de propietario único. Serialice las llamadas que comparten el mismo `Loop`, incluidas `SubmitExpr`,
@@ -151,8 +151,8 @@ results, err := loop.Run()
 ```
 
 `NewLoop` usa [`HeapMemory`](completion_memory.go) como proveedor predeterminado del búfer de finalizaciones. Si quiere
-que esos búferes provengan de un pool acotado y estable de slabs de 128 KiB de tamaño predeterminado, pase [
-`BoundedMemory`](completion_memory.go) mediante [`WithMemory`](option.go); o proporcione cualquier implementación de
+que esos búferes provengan de un pool acotado y estable de slabs de 128 KiB de tamaño predeterminado, pase
+[`BoundedMemory`](completion_memory.go) mediante [`WithMemory`](option.go); o proporcione cualquier implementación de
 `CompletionMemory` para controlar la estrategia de asignación sin ampliar los contratos de `Backend` ni de `Completion`.
 Los proveedores personalizados deben devolver slabs vivos exclusivos y no solapados, y pueden tratar `Release` como una
 transferencia de propiedad de vuelta al proveedor:

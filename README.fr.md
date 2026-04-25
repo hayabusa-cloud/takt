@@ -118,7 +118,7 @@ panique si `n <= 0` avec `takt: WithMaxCompletions requires n > 0` ; `WithMemory
 `takt: WithMemory requires a non-nil CompletionMemory`.
 
 `Backend.Poll([]Completion) (int, error)` rapporte à la fois le nombre de complétions prêtes et tout échec
-d'infrastructure de sondage. La `Loop` traite un `iox.ErrWouldBlock` renvoyé par `Poll` comme un tour à vide plutôt que
+d'infrastructure de sondage. Le `Loop` traite un `iox.ErrWouldBlock` renvoyé par `Poll` comme un tour à vide plutôt que
 comme une erreur terminale.
 
 `Loop` est un runner à propriétaire unique. Sérialisez les appels qui partagent la même `Loop`, notamment `SubmitExpr`,
@@ -131,7 +131,7 @@ exactement une fois, puis tout appel ultérieur à `SubmitExpr` / `Submit` / `Po
 Lorsqu'une complétion porte `iox.ErrWouldBlock`, la boucle resoumet la même opération. Si une complétion porte
 `iox.ErrMore` (multishot), la boucle enregistre `ErrUnsupportedMultishot`, rejette chaque suspension pendante exactement
 une fois, et tout appel ultérieur à `SubmitExpr` / `Submit` / `Poll` / `Run` renvoie cette erreur fatale. `ErrMore`
-signifie que l'opération backend soumise reste active après la CQE, tandis que la `Loop` générique n'a pas de porteur
+signifie que l'opération backend soumise reste active après la CQE, tandis que le `Loop` générique n'a pas de porteur
 d'abonnement/annulation pour les complétions ultérieures du même jeton.
 
 `Loop.Failed()` renvoie l'erreur fatale enregistrée (ou `nil`). `Loop.Drain()` force la boucle dans l'état disposé,
@@ -151,8 +151,8 @@ results, err := loop.Run()
 ```
 
 `NewLoop` utilise [`HeapMemory`](completion_memory.go) comme fournisseur par défaut du buffer de complétion. Si vous
-voulez que ces buffers proviennent d'un pool borné et stable de slabs de 128 KiB de taille par défaut, passez [
-`BoundedMemory`](completion_memory.go) via [`WithMemory`](option.go) ; ou fournissez n'importe quelle implémentation de
+voulez que ces buffers proviennent d'un pool borné et stable de slabs de 128 KiB de taille par défaut, passez
+[`BoundedMemory`](completion_memory.go) via [`WithMemory`](option.go) ; ou fournissez n'importe quelle implémentation de
 `CompletionMemory` pour contrôler la stratégie d'allocation sans élargir les contrats de `Backend` ni de `Completion`.
 Les fournisseurs personnalisés doivent renvoyer des slabs vivants exclusifs et non chevauchants, et peuvent traiter
 `Release` comme un transfert de propriété vers le fournisseur :
@@ -223,7 +223,7 @@ avancée avec erreurs
 - `(*Loop[B, R]).Failed() error` — erreur fatale terminale, ou nil
 - `(*Loop[B, R]).Drain() int` — abandonne les suspensions en attente et dispose la boucle
 - `ErrLiveTokenReuse` — le backend a réutilisé un jeton encore vivant dans la boucle
-- `ErrUnsupportedMultishot` — une complétion multishot n'est pas prise en charge par la `Loop` générique
+- `ErrUnsupportedMultishot` — une complétion multishot n'est pas prise en charge par le `Loop` générique
 - `ErrDisposed` — la boucle a été disposée via `Drain`
 
 ### Pont

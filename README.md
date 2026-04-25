@@ -145,8 +145,8 @@ loop.Submit(contComputation) // kont.Eff
 results, err := loop.Run()
 ```
 
-`NewLoop` uses [`HeapMemory`](completion_memory.go) as the default completion-buffer provider. Pass [
-`BoundedMemory`](completion_memory.go) via [`WithMemory`](option.go) when completion buffers should come from a bounded
+`NewLoop` uses [`HeapMemory`](completion_memory.go) as the default completion-buffer provider. Pass
+[`BoundedMemory`](completion_memory.go) via [`WithMemory`](option.go) when completion buffers should come from a bounded
 steady-state pool of default-sized 128 KiB slabs; or supply a custom `CompletionMemory` implementation to control
 allocation strategy without widening the `Backend` or `Completion` contracts. Custom providers must return exclusive
 non-overlapping live slabs and may treat `Release` as ownership transfer back to the provider:
