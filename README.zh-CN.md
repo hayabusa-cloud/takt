@@ -22,6 +22,12 @@
 事件循环路径为每个存活 token 只保存一个挂起。每个 token 跟踪由 `kont.StepExpr` （或先将 `kont.Eff` reify 之后）产生的挂起，因此
 `Backend.Submit` 不能在旧提交仍然存活于循环中时复用该 token。
 
+## 组合边界
+
+`takt` 只拥有执行推进，不拥有上下文含义或结果词汇。`iox` 对 `nil`、`ErrWouldBlock`、`ErrMore` 与失败进行分类；`kont`
+拥有挂起/恢复载体；`cove` 可以通过 `SuspensionView` 为挂起包裹显式上下文；`takt` 推进任何满足 `SuspensionLike`
+的值，但不解释该上下文。
+
 ## 安装
 
 ```bash

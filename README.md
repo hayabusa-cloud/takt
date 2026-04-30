@@ -26,6 +26,13 @@ The event-loop path stores one pending suspension per live token. Each token tra
 `kont.StepExpr` (or by reifying `kont.Eff` first), so `Backend.Submit` must not reuse a token while the older submission
 carrying it remains live in the loop.
 
+## Composition Boundary
+
+`takt` owns execution movement, not context meaning or outcome vocabulary. `iox` classifies `nil`, `ErrWouldBlock`,
+`ErrMore`, and failure; `kont` owns the suspension/resumption carrier; `cove` may wrap a suspension with explicit
+context through `SuspensionView`; `takt` advances any value that satisfies `SuspensionLike` without interpreting that
+context.
+
 ## Installation
 
 ```bash

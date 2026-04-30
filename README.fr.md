@@ -28,6 +28,13 @@ Le chemin de boucle d'événements garde une seule suspension pendante par jeton
 produite par `kont.StepExpr` (ou après réification de `kont.Eff`), donc `Backend.Submit` ne doit pas réutiliser un jeton
 tant que la soumission plus ancienne qui le porte reste vivante dans la boucle.
 
+## Limite de composition
+
+`takt` possède le mouvement d'exécution, pas le sens du contexte ni le vocabulaire des résultats. `iox` classe `nil`,
+`ErrWouldBlock`, `ErrMore` et les échecs ; `kont` possède le porteur de suspension/reprise ; `cove` peut envelopper une
+suspension avec un contexte explicite via `SuspensionView` ; `takt` avance toute valeur qui satisfait `SuspensionLike`
+sans interpréter ce contexte.
+
 ## Installation
 
 ```bash
@@ -125,17 +132,17 @@ comme une erreur terminale.
 `Submit`, `Poll`, `Run`, `Drain`, `Pending` et `Failed`.
 
 `Backend.Submit` doit renvoyer un jeton unique parmi toutes les soumissions encore vivantes dans la boucle. Si un
-backend réutilise un jeton vivant, la boucle enregistre `ErrLiveTokenReuse`, rejette chaque suspension pendante
+backend réutilise un jeton vivant, la boucle enregistre `ErrLiveTokenReuse`, écarte chaque suspension pendante
 exactement une fois, puis tout appel ultérieur à `SubmitExpr` / `Submit` / `Poll` / `Run` renvoie cette erreur fatale.
 
 Lorsqu'une complétion porte `iox.ErrWouldBlock`, la boucle resoumet la même opération. Si une complétion porte
-`iox.ErrMore` (multishot), la boucle enregistre `ErrUnsupportedMultishot`, rejette chaque suspension pendante exactement
+`iox.ErrMore` (multishot), la boucle enregistre `ErrUnsupportedMultishot`, écarte chaque suspension pendante exactement
 une fois, et tout appel ultérieur à `SubmitExpr` / `Submit` / `Poll` / `Run` renvoie cette erreur fatale. `ErrMore`
 signifie que l'opération backend soumise reste active après la CQE, tandis que le `Loop` générique n'a pas de porteur
 d'abonnement/annulation pour les complétions ultérieures du même jeton.
 
 `Loop.Failed()` renvoie l'erreur fatale enregistrée (ou `nil`). `Loop.Drain()` force la boucle dans l'état disposé,
-rejette chaque suspension pendante exactement une fois et n'enregistre `ErrDisposed` que si aucune erreur fatale n'était
+écarte chaque suspension pendante exactement une fois et n'enregistre `ErrDisposed` que si aucune erreur fatale n'était
 déjà présente ; la méthode est idempotente et préserve toute erreur fatale préexistante.
 
 ```go
