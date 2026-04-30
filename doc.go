@@ -50,11 +50,12 @@
 // [Loop.Poll] and [Loop.Run] surface [ErrLiveTokenReuse] after draining every
 // pending suspension exactly once. [Loop.Poll] and [Loop.Run] return
 // [ErrUnsupportedMultishot] for completion-level [code.hybscloud.com/iox.ErrMore]:
-// the completion is available, but its [Completion.Value] is not resumed into
-// the suspended operation because the submitted backend operation remains active
-// and may produce later same-token completions. Generic [Loop] has no
-// subscription/cancel carrier for that still-live operation, so multishot
-// stream ownership belongs in a concrete layer above takt.
+// a completion was received from the backend, but its [Completion.Value] is
+// not resumed into the suspended operation because the submitted backend
+// operation remains active and may produce later same-token completions.
+// Generic [Loop] has no subscription/cancel carrier for that still-live
+// operation, so multishot stream ownership belongs in a concrete layer above
+// takt.
 //
 // [CompletionMemory] supplies the [Completion] slice that a [Loop] passes to
 // [Backend.Poll]. Use [NewLoop] with [Option]s: [WithMemory] installs a custom
