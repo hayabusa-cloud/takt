@@ -24,7 +24,11 @@
 //
 //   - Blocking: [Exec]/[ExecExpr] wait on ErrWouldBlock with adaptive backoff
 //   - Error-aware blocking: [ExecError]/[ExecErrorExpr] return [code.hybscloud.com/kont.Either]
-//   - Stepping with errors: [StepError]/[AdvanceError] preserve the [code.hybscloud.com/kont.Either] result at each step; [AdvanceSuspension] extends the same contract to contextual suspension carriers such as [code.hybscloud.com/cove.SuspensionView]
+//   - Stepping with errors: [StepError]/[AdvanceError] preserve the [code.hybscloud.com/kont.Either] result at each step
+//   - Contextual stepping: [AdvanceSuspension] applies the same one-operation
+//     movement law to contextual suspension carriers such as
+//     [code.hybscloud.com/cove.SuspensionView] without making takt own their
+//     context
 //   - Bridge helpers: [Step] reuses [code.hybscloud.com/kont.StepExpr]; [Reify] and [Reflect] re-export the `kont` conversions so callers do not need a second import
 //   - Lifecycle: [Loop.Failed], [Loop.Drain], [ErrDisposed], [ErrLiveTokenReuse], and [ErrUnsupportedMultishot] expose the terminal fatal state
 //
@@ -46,10 +50,12 @@
 // [Loop.Poll] and [Loop.Run] surface [ErrLiveTokenReuse] after draining every
 // pending suspension exactly once. [Loop.Poll] and [Loop.Run] return
 // [ErrUnsupportedMultishot] for completion-level [code.hybscloud.com/iox.ErrMore]:
-// the CQE is usable, but the submitted backend operation remains active and may
-// produce later same-token completions. Generic [Loop] has no
-// subscription/cancel carrier for that still-live operation, so multishot
-// stream ownership belongs in a concrete layer above takt.
+// a completion was received from the backend, but its [Completion.Value] is
+// not resumed into the suspended operation because the submitted backend
+// operation remains active and may produce later same-token completions.
+// Generic [Loop] has no subscription/cancel carrier for that still-live
+// operation, so multishot stream ownership belongs in a concrete layer above
+// takt.
 //
 // [CompletionMemory] supplies the [Completion] slice that a [Loop] passes to
 // [Backend.Poll]. Use [NewLoop] with [Option]s: [WithMemory] installs a custom

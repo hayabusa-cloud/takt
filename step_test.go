@@ -174,6 +174,48 @@ func TestAdvanceSuspensionWouldBlockReturnsObservedSuspension(t *testing.T) {
 	}
 }
 
+func TestAdvanceSuspensionWithContextPreservesContextOnErrMore(t *testing.T) {
+	cont := kont.Bind(kont.Perform(echoOp{}), func(v int) kont.Eff[int] {
+		return kont.Bind(kont.Perform(echoOp{}), func(w int) kont.Eff[int] {
+			return kont.Pure(v + w)
+		})
+	})
+
+	_, step := cove.StepWith("ctx", cont)
+	if step.Suspension == nil {
+		t.Fatal("expected suspension")
+	}
+
+	d := &errMoreDispatcher{value: 15}
+	result, next, err := takt.AdvanceSuspension(d, step)
+	if !iox.IsMore(err) {
+		t.Fatalf("expected ErrMore, got %v", err)
+	}
+	if result != 0 {
+		t.Fatalf("got %d, want 0 (zero value)", result)
+	}
+	if next.Suspension == nil {
+		t.Fatal("expected next suspension")
+	}
+	if next.Ask() != "ctx" {
+		t.Fatalf("unexpected ctx: %v", next.Ask())
+	}
+
+	result, done, err := takt.AdvanceSuspension(d, next)
+	if err != nil {
+		t.Fatalf("expected nil error, got %v", err)
+	}
+	if done.Suspension != nil {
+		t.Fatal("expected completion")
+	}
+	if done.Ask() != "ctx" {
+		t.Fatalf("unexpected completion ctx: %q", done.Ask())
+	}
+	if result != 31 {
+		t.Fatalf("got %d, want 31", result)
+	}
+}
+
 func TestSuspensionViewSatisfiesSuspensionLike(t *testing.T) {
 	step := cove.ObserveSuspension("ctx", &kont.Suspension[int]{})
 	var _ takt.SuspensionLike[cove.SuspensionView[string, int], int] = step

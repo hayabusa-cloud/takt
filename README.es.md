@@ -28,6 +28,13 @@ La ruta del bucle de eventos guarda una sola suspensión pendiente por cada toke
 producida por `kont.StepExpr` (o por reificar antes `kont.Eff`), por lo que `Backend.Submit` no debe reutilizar un token
 mientras el envío anterior que lo porta siga vivo en el bucle.
 
+## Límite de composición
+
+`takt` es dueño del movimiento de ejecución, no del significado del contexto ni del vocabulario de resultados. `iox`
+clasifica `nil`, `ErrWouldBlock`, `ErrMore` y los fallos; `kont` posee el portador de suspensión/reanudación; `cove`
+puede envolver una suspensión con contexto explícito mediante `SuspensionView`; `takt` avanza cualquier valor que
+satisfaga `SuspensionLike` sin interpretar ese contexto.
+
 ## Instalación
 
 ```bash
