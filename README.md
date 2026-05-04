@@ -33,14 +33,14 @@ Requires Go 1.26 or later.
 
 ## Outcome Classification
 
-Each dispatched operation yields an `iox` outcome. The dispatcher and stepping API handle each case:
+Each dispatched operation yields an `iox` outcome. `Dispatcher.Dispatch` reports that outcome as `(value, error)`; blocking runners and the stepping API interpret it as follows:
 
-| Outcome | Meaning | Dispatcher | Stepping API |
-|---------|---------|------------|-------------|
-| `nil` | completed | resume | resume, return `nil` |
-| `ErrMore` | progress with a live frontier | resume | resume, return `ErrMore` |
-| `ErrWouldBlock` | no progress | wait | return suspension to caller |
-| other | infrastructure failure | panic | return error to caller |
+| Outcome | Meaning | Dispatcher return | Blocking / stepping behavior |
+|---------|---------|-------------------|------------------------------|
+| `nil` | completed | `(value, nil)` | resume |
+| `ErrMore` | progress with a live frontier | `(value, ErrMore)` | resume; stepping returns `ErrMore` |
+| `ErrWouldBlock` | no progress | `(nil, ErrWouldBlock)` | blocking waits; stepping returns the suspension |
+| other | infrastructure failure | `(nil, error)` | blocking panics; stepping returns the error |
 
 ## Usage
 

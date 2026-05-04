@@ -33,14 +33,14 @@ Nécessite Go 1.26+.
 
 ## Classification des résultats
 
-Chaque opération dispatchée renvoie un résultat `iox`. Le dispatcher et l'API de stepping traitent chaque cas :
+Chaque opération dispatchée renvoie un résultat `iox`. `Dispatcher.Dispatch` rapporte ce résultat sous la forme `(value, error)` ; les runners bloquants et l'API de stepping l'interprètent ainsi :
 
-| Résultat        | Signification           | Dispatcher | API de stepping                    |
-|-----------------|-------------------------|------------|------------------------------------|
-| `nil`           | terminé                 | reprend    | reprend, renvoie `nil`             |
-| `ErrMore`       | progrès avec frontière vivante | reprend    | reprend, renvoie `ErrMore`         |
-| `ErrWouldBlock` | aucun progrès           | attend     | renvoie la suspension à l'appelant |
-| autre           | échec d'infrastructure  | panique    | renvoie l'erreur à l'appelant      |
+| Résultat        | Signification                 | Retour Dispatcher       | Comportement bloquant/stepping                       |
+|-----------------|-------------------------------|-------------------------|------------------------------------------------------|
+| `nil`           | terminé                       | `(value, nil)`          | reprend                                              |
+| `ErrMore`       | progrès avec frontière vivante | `(value, ErrMore)`      | reprend ; le stepping renvoie `ErrMore`              |
+| `ErrWouldBlock` | aucun progrès                 | `(nil, ErrWouldBlock)`  | le bloquant attend ; le stepping renvoie la suspension |
+| autre           | échec d'infrastructure        | `(nil, error)`          | le bloquant panique ; le stepping renvoie l'erreur   |
 
 ## Utilisation
 
