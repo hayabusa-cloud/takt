@@ -210,7 +210,7 @@ func (l *Loop[B, R]) submit(susp *kont.Suspension[R]) error {
 // is submitted again under a fresh token. Multishot completions (`iox.ErrMore`)
 // are rejected because the same backend submission remains active after the CQE,
 // while Loop only tracks one affine suspension per submitted operation. Concrete
-// runtimes that need multishot streams should own a subscription/cancel carrier
+// runtimes that need multishot streams should own a subscription or cancel carrier
 // above this generic Loop.
 //
 // Returns completed results when one or more computations finish in the current
@@ -304,7 +304,7 @@ func (l *Loop[B, R]) handleCompletion(c Completion) (resumeResult[R], bool, erro
 	}
 	if outcome == iox.OutcomeMore {
 		// ErrMore says the submitted backend operation is still live. Generic
-		// Loop has no subscription/cancel carrier for that active operation, so
+		// Loop has no subscription or cancel carrier for that active operation, so
 		// consuming the one-shot suspension would either leak future CQEs or
 		// retarget them to an unsubmitted successor effect.
 		susp.Discard()

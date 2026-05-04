@@ -35,7 +35,7 @@
 // # iox Classification
 //
 //   - nil: completed
-//   - [code.hybscloud.com/iox.ErrMore]: progress, more completions expected
+//   - [code.hybscloud.com/iox.ErrMore]: progress with a live frontier
 //   - [code.hybscloud.com/iox.ErrWouldBlock]: no progress, retry later
 //   - failure: infrastructure error
 //
@@ -45,15 +45,15 @@
 // is treated as idle, while completion-level
 // [code.hybscloud.com/iox.ErrWouldBlock] triggers a fresh submission for the
 // same suspension without marking that tick as progress. [Backend.Submit] must
-// return a token that is unique among
-// all submissions still live in the loop; if a backend reuses a live token,
-// [Loop.Poll] and [Loop.Run] surface [ErrLiveTokenReuse] after draining every
+// return a token that is unique among all submissions still live in the loop;
+// if a backend reuses a live token, [Loop.Poll] and [Loop.Run] surface
+// [ErrLiveTokenReuse] after draining every
 // pending suspension exactly once. [Loop.Poll] and [Loop.Run] return
 // [ErrUnsupportedMultishot] for completion-level [code.hybscloud.com/iox.ErrMore]:
 // a completion was received from the backend, but its [Completion.Value] is
 // not resumed into the suspended operation because the submitted backend
 // operation remains active and may produce later same-token completions.
-// Generic [Loop] has no subscription/cancel carrier for that still-live
+// Generic [Loop] has no subscription or cancel carrier for that still-live
 // operation, so multishot stream ownership belongs in a concrete layer above
 // takt.
 //
@@ -82,6 +82,11 @@
 // Each [AdvanceSuspension] call handles exactly one suspended operation. If
 // resuming that operation produces another suspension, the caller receives it
 // back and decides how to continue.
+//
+// [AdvanceSuspension] resumes on [code.hybscloud.com/iox.ErrMore] because
+// `iox` classifies ErrMore as progress with a live frontier. It returns the
+// original suspension unchanged on [code.hybscloud.com/iox.ErrWouldBlock] or
+// ordinary failure.
 //
 // [Loop] stores pending `*kont.Suspension` frontiers produced by
 // [code.hybscloud.com/kont.StepExpr] (or by reifying

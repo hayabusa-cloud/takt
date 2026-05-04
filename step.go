@@ -29,8 +29,9 @@ func Step[R any](m kont.Expr[R]) (R, *kont.Suspension[R]) {
 }
 
 // AdvanceSuspension dispatches one suspended operation through a Dispatcher.
-// Progress resumes the suspension; would-block and failure return the original
-// value unchanged.
+// A nil dispatch error and [iox.ErrMore] resume the suspension and return the
+// next frontier. [iox.ErrWouldBlock] and ordinary failure return the original
+// suspension value unchanged.
 func AdvanceSuspension[D Dispatcher[D], S SuspensionLike[S, R], R any](d D, susp S) (R, S, error) {
 	v, err := d.Dispatch(susp.Op())
 	if iox.IsProgress(err) {
@@ -43,7 +44,8 @@ func AdvanceSuspension[D Dispatcher[D], S SuspensionLike[S, R], R any](d D, susp
 
 // Advance dispatches one suspended operation via a Dispatcher.
 // Use [AdvanceSuspension] when the suspension also carries external context.
-// Progress resumes the suspension; would-block and failure return it unchanged.
+// A nil dispatch error and [iox.ErrMore] resume the suspension;
+// [iox.ErrWouldBlock] and ordinary failure return it unchanged.
 func Advance[D Dispatcher[D], R any](d D, susp *kont.Suspension[R]) (R, *kont.Suspension[R], error) {
 	return AdvanceSuspension[D](d, susp)
 }

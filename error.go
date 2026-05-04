@@ -74,7 +74,9 @@ func StepError[E, R any](m kont.Expr[R]) (kont.Either[E, R], *kont.Suspension[ko
 
 // AdvanceError dispatches the suspended operation.
 // Throw discards the suspension and returns Left; other operations go through
-// the dispatcher with the usual `iox` classification.
+// the dispatcher with the usual `iox` classification. A nil dispatch error and
+// [iox.ErrMore] resume the suspension; [iox.ErrWouldBlock] and ordinary failure
+// return it unchanged.
 func AdvanceError[E any, D Dispatcher[D], R any](d D, susp *kont.Suspension[kont.Either[E, R]]) (kont.Either[E, R], *kont.Suspension[kont.Either[E, R]], error) {
 	// Error operations are handled eagerly.
 	if eop, ok := susp.Op().(interface {

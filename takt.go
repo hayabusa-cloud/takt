@@ -17,8 +17,9 @@ import (
 
 // Dispatcher is the interface for non-blocking operation dispatch.
 // Dispatch returns (value, nil) on completion, (value, iox.ErrMore) when
-// progress is made and more completions remain, (nil, iox.ErrWouldBlock) when
-// no progress is currently possible, or (nil, error) on infrastructure failure.
+// progress is made and the operation remains live, (nil, iox.ErrWouldBlock)
+// when no progress is currently possible, or (nil, error) on infrastructure
+// failure.
 type Dispatcher[D Dispatcher[D]] interface {
 	Dispatch(op kont.Operation) (kont.Resumed, error)
 }
@@ -31,7 +32,7 @@ var ErrLiveTokenReuse = errors.New("takt: backend reused a live token")
 // ErrUnsupportedMultishot reports that a backend produced a multishot
 // completion for [Loop]. ErrMore means the submitted backend operation remains
 // active after the CQE; generic Loop tracks affine one-shot suspensions and has
-// no subscription/cancel carrier for later same-token completions.
+// no subscription or cancel carrier for later same-token completions.
 var ErrUnsupportedMultishot = errors.New("takt: unsupported multishot completion")
 
 // ErrDisposed reports that a Loop has been explicitly disposed via [Loop.Drain]

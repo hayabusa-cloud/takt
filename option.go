@@ -10,9 +10,9 @@ package takt
 //   - [WithMemory] supplies a custom [CompletionMemory] provider (defaults to a fresh
 //     [HeapMemory]).
 //   - [WithMaxCompletions] caps the per-poll completion slab length
-//     (defaults to the CompletionMemory provider's own choice — see
-//     [DefaultCompletionBufSize] for the [HeapMemory] / [BoundedMemory]
-//     default).
+//     (defaults to the CompletionMemory provider's own choice; see
+//     [DefaultCompletionBufSize] for the [HeapMemory] and [BoundedMemory]
+//     default size).
 type Option interface {
 	applyLoop(*loopConfig)
 }
