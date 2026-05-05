@@ -11,13 +11,15 @@
 
 ## 概要
 
-proactor モデルでは、I/O 操作はカーネルに送信され、その完了は非同期に到着します。アプリケーションは各完了をそれを要求した計算に対応付け、その計算を再開し、成功、生存中フロンティアを伴う進行、進行なしの readiness/backpressure、失敗を処理しなければなりません。
+proactor モデルでは、I/O 操作はカーネルに送信され、その完了は非同期に到着します。アプリケーションは各完了をそれを要求した計算に対応付け、その計算を再開し、成功、生存中フロンティアを伴う進行、進行なしの準備状態/backpressure、失敗を処理しなければなりません。
 
 `takt` はこの実行モデルを [kont](https://code.hybscloud.com/kont) エフェクトシステム上の抽象レイヤーとして提供します。`Dispatcher` は一度に 1 つの代数的エフェクトを評価し、[iox](https://code.hybscloud.com/iox) のアウトカム代数に従って結果を分類します。`Backend` は非同期エンジン、たとえば `io_uring` に操作を送信し、完了をポーリングします。`Loop` はそれらをまとめ、計算を送信し、バックエンドをポーリングし、トークンで完了を関連付け、中断された継続を再開します。
 
 等価な API が 2 つあります。`kont.Eff` はクロージャベースで合成しやすく、`kont.Expr` はフレームベースでホットパスの割り当てを抑えます。
 
 イベントループ経路は、生存中の各トークンにつき 1 つの保留サスペンションだけを保持します。各トークンは `kont.StepExpr`（または事前に `kont.Eff` を reify したもの）から生じたサスペンションを追跡するため、`Backend.Submit` はそのトークンを持つ古い送信がループ内でまだ生きている間は、そのトークンを再利用してはいけません。
+
+ストリームまたは multishot 形式の統合には、`SubscriptionLoop` が別個の抽象ルートランナーを提供します。`RouteID`（`Token` と generation）で `Subscription` ハンドルを追跡し、`StreamCompletion` 値をポーリングし、`StreamEvent` 観測を発行し、`More` をペイロード値やペイロードエラーから独立したルート生存証拠として保持します。これにより汎用 `Loop` はアフィンで一回限りのまま保たれ、具体ランタイムは同一操作の後続観測を表す明確な場所を持てます。
 
 ## 合成境界
 
@@ -33,7 +35,7 @@ Go 1.26 以降が必要です。
 
 ## アウトカム分類
 
-ディスパッチされた各操作は `iox` アウトカムを返します。`Dispatcher.Dispatch` はそのアウトカムを `(value, error)` として報告し、ブロッキング runner とステッピング API は次のように解釈します:
+ディスパッチされた各操作は `iox` アウトカムを返します。`Dispatcher.Dispatch` はそのアウトカムを `(value, error)` として報告し、ブロッキングランナーとステッピング API は次のように解釈します:
 
 | アウトカム           | 意味            | Dispatcher の戻り値         | ブロッキング/ステッピング動作                         |
 |-----------------|---------------|--------------------------|-------------------------------------------|
@@ -106,11 +108,11 @@ if susp != nil {
 
 `Loop` は `Backend` を通じて計算を駆動します。操作を送信し、完了をポーリングし、`Token` で関連付け、中断された継続を再開します。`NewLoop` は関数型 `Option` を受け取ります。`WithMaxCompletions(n)` は `n <= 0` のとき `takt: WithMaxCompletions requires n > 0` でパニックし、`WithMemory(nil)` は `takt: WithMemory requires a non-nil CompletionMemory` でパニックします。
 
-`Backend.Poll([]Completion) (int, error)` は、準備済み完了件数とインフラストラクチャのポーリング失敗の両方を報告します。`Loop` は `Poll` から返る `iox.ErrWouldBlock` を終端エラーではなくアイドルティックとして扱います。
+`Backend.Poll([]Completion) (int, error)` は、準備済み完了件数とインフラストラクチャのポーリング失敗の両方を報告します。バックエンドは、非 nil のポーリングレベル error と準備済み完了を同時に返してはいけません。`Loop` は `Poll` から返る `iox.ErrWouldBlock` を終端エラーではなくアイドルティックとして扱います。
 
-`Loop` は単一所有者の runner です。同じ `Loop` を共有する `SubmitExpr`, `Submit`, `Poll`, `Run`, `Drain`, `Pending`, `Failed` の呼び出しは直列化してください。
+`Loop` は単一所有者のランナーです。同じ `Loop` を共有する `SubmitExpr`, `Submit`, `Poll`, `Run`, `Drain`, `Pending`, `Failed` の呼び出しは直列化してください。
 
-`Backend.Submit` は、ループ内でまだ生存しているすべての送信の間で一意なトークンを返さなければなりません。バックエンドが生存中トークンを再利用した場合、ループは `ErrLiveTokenReuse` を記録し、すべての保留サスペンションをちょうど一度だけ破棄し、その後の `SubmitExpr` / `Submit` / `Poll` / `Run` はこの致命的エラーを返します。
+`Backend.Submit` は、ループ内でまだ生存しているすべての送信の間で一意なトークンを返さなければなりません。トークンは相関キーであり、シーケンス番号ではありません。具体的なバックエンドは kernel `user_data` 値を直接使えます。バックエンドが生存中トークンを再利用した場合、ループは `ErrLiveTokenReuse` を記録し、すべての保留サスペンションをちょうど一度だけ破棄し、その後の `SubmitExpr` / `Submit` / `Poll` / `Run` はこの致命的エラーを返します。
 
 完了が `iox.ErrWouldBlock` を伴う場合、ループは同じ操作を再送信します。完了が `iox.ErrMore`（マルチショット）を伴う場合、ループは `ErrUnsupportedMultishot` を記録し、保留中のサスペンションをそれぞれ一度だけ破棄し、以降の `SubmitExpr` / `Submit` / `Poll` / `Run` 呼び出しはその致命的エラーを返します。`ErrMore` は CQE 後も送信済みのバックエンド操作が生存していることを意味しますが、汎用 `Loop` には同一トークンの後続完了を所有する購読またはキャンセルのキャリアがありません。
 
@@ -126,6 +128,43 @@ loop.Submit(contComputation) // kont.Eff
 
 // すべて完了するまで進める
 results, err := loop.Run()
+```
+
+### ストリーム / サブスクリプションランナー
+
+`SubscriptionLoop` は、ルートでインデックスされたストリーム観測のための同格ランナーです。`SubscriptionBackend` は `Subscribe` で操作を開始し、`StreamCompletion` 値をポーリングし、生存中ルートに対する `Cancel` 要求を受け付けます。`RouteID` は `Token` と generation を組み合わせるため、最終化後に `Token` を再利用しても以前の生存中ルートと混同されません。
+
+`StreamCompletion.More` は、その観測後も同じルートが生存していることを意味します。`HasValue` と `EventErr` はその境界におけるペイロード証拠を記述し、`More` とは独立しています。つまり完了は、値と後続あり、値なしで後続あり、またはルートが生存したままのペイロードエラーを表せます。`More == false` の完了は final `StreamEvent` を発行し、そのルートを退役させます。
+
+`Subscribe` はゼロ `RouteID` を `ErrInvalidRouteID` で拒否し、生存中ルートの別名化を `ErrLiveRouteReuse` で拒否します。どちらの条件もストリームループを致命状態にします。ポーリングレベルの `iox.ErrWouldBlock` はアイドルティックです。`SubscriptionBackend` は、非 nil のポーリングレベル error と準備済みストリーム完了を同時に返してはいけません。ペイロードエラーは `StreamCompletion.EventErr` に載せます。未知またはすでに退役したルート完了は古い観測として無視されます。`Cancel` はルートキャンセルを要求しますが、即座には退役させません。終端完了、`Drain`、または致命的なループ遷移がそのルートを退役させます。
+
+```go
+type myStreamBackend struct{ /* ... */ }
+
+func (b *myStreamBackend) Subscribe(op kont.Operation) (takt.RouteID, error) {
+	return takt.NewRouteID(tok, generation), nil
+}
+
+func (b *myStreamBackend) Poll(out []takt.StreamCompletion[int]) (int, error) {
+	// ルートでインデックスされた観測を out に書き込む。
+	return n, nil
+}
+
+func (b *myStreamBackend) Cancel(id takt.RouteID) error {
+	// 生存中ルートのキャンセルを要求する。
+	return nil
+}
+
+stream := takt.NewSubscriptionLoop[*myStreamBackend, int](
+	backend,
+	takt.WithMaxStreamCompletions(64),
+)
+
+sub, err := stream.Subscribe(op)
+events, err := stream.Poll()
+_ = sub
+_ = events
+_ = err
 ```
 
 `NewLoop` は完了バッファの既定プロバイダとして [`HeapMemory`](completion_memory.go) を使います。完了バッファを既定サイズ 128 KiB の slab から成る有界かつ安定したプールから取得したい場合は、[`WithMemory`](option.go) で [`BoundedMemory`](completion_memory.go) を渡してください。あるいは、`Backend` や `Completion` の契約を広げずに割り当て戦略を制御したい場合は、独自の `CompletionMemory` を実装してください。カスタムプロバイダは、生存中 slab を他と重ならない排他的なものとして返し、`Release` をプロバイダ側への所有権移譲として扱ってかまいません:
@@ -195,6 +234,33 @@ loop = takt.NewLoop[*myBackend, int](
 - `ErrLiveTokenReuse`: バックエンドがループ内でまだ生存しているトークンを再利用したことを示す
 - `ErrUnsupportedMultishot`: 汎用 `Loop` はマルチショット完了をサポートしない
 - `ErrDisposed`: `Drain` によりループが廃棄されたことを示す
+
+### ストリームルート
+
+- `RouteID`: ストリームルートの識別情報（`Token` と generation）
+- `NewRouteID(token Token, generation uint64) RouteID`: ストリームバックエンド用のルート識別子を作成する
+- `RouteID.Token() Token`: `Token` 成分
+- `RouteID.Generation() uint64`: generation 成分
+- `RouteID.IsZero() bool`: 予約済み無効ルートの判定
+- `Subscription[A]`: 不透明な生存中ストリームハンドル
+- `Subscription[A].ID() RouteID`: ハンドルが保持するルート識別情報
+- `Subscription[A].IsZero() bool`: ゼロ値で非生存のハンドルの判定
+- `StreamCompletion[A]`: `{ID, Value, HasValue, EventErr, More}`
+- `StreamCompletion[A].RouteOutcome() iox.Outcome`: `iox` アウトカム語彙への射影
+- `StreamEvent[A]`: `{Subscription, Value, HasValue, Final, EventErr}`
+- `SubscriptionBackend[B, A]`: 抽象ストリームバックエンドインターフェース（`Subscribe`, `Poll`, `Cancel`）
+- `SubscriptionOption`: `NewSubscriptionLoop` 用の関数型オプション
+- `WithMaxStreamCompletions(n)`: 1 回のポーリングに使うストリーム完了バッファを制限する
+- `NewSubscriptionLoop[B, A](b B, opts ...SubscriptionOption) *SubscriptionLoop[B, A]`: ストリームランナーを作成する
+- `(*SubscriptionLoop[B, A]).Subscribe(op kont.Operation) (Subscription[A], error)`: ルート生成操作を開始する
+- `(*SubscriptionLoop[B, A]).Poll() ([]StreamEvent[A], error)`: ルートでインデックスされたイベントをポーリングする
+- `(*SubscriptionLoop[B, A]).Cancel(sub Subscription[A]) error`: ルートキャンセルを要求する
+- `(*SubscriptionLoop[B, A]).Pending() int`: 生存中ストリームルート数
+- `(*SubscriptionLoop[B, A]).Failed() error`: 終端致命エラー。未発生時は nil
+- `(*SubscriptionLoop[B, A]).Drain() int`: 所有中ルートをキャンセルまたは退役させ、ストリームループを廃棄する
+- `ErrLiveRouteReuse`: バックエンドがまだ生存中のルートを再利用したことを示す
+- `ErrInvalidRouteID`: バックエンドが予約済みゼロ `RouteID` を返したことを示す
+- `ErrUnknownSubscription`: サブスクリプションハンドルがストリームループ内で生存していないことを示す
 
 ### ブリッジ
 

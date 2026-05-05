@@ -19,6 +19,8 @@ Two equivalent APIs are available: `kont.Eff` (closure-based, straightforward to
 
 The event-loop path stores one pending suspension per live token. Each token tracks a suspension produced by `kont.StepExpr` (or by reifying `kont.Eff` first), so `Backend.Submit` must not reuse a token while the older submission carrying it remains live in the loop.
 
+For stream or multishot-style integrations, `SubscriptionLoop` provides a separate abstract route runner. It tracks `Subscription` handles by `RouteID` (`Token` plus generation), polls `StreamCompletion` values, emits `StreamEvent` observations, and keeps `More` as route-liveness evidence independent of payload value or payload error. This keeps generic `Loop` affine and one-shot while still giving concrete runtimes a principled place to represent same-operation successor observations.
+
 ## Composition Boundary
 
 `takt` owns execution movement, not context meaning or outcome vocabulary. `iox` classifies `nil`, `ErrWouldBlock`, `ErrMore`, and failure; `kont` owns the suspension/resumption carrier; `cove` may wrap a suspension with explicit context through `SuspensionView`; `takt` advances any value that satisfies `SuspensionLike` without interpreting that context.
@@ -106,11 +108,11 @@ if susp != nil {
 
 A `Loop` drives computations through a `Backend`. It submits operations, polls for completions, correlates them by `Token`, and resumes suspended continuations. `NewLoop` accepts functional `Option`s. `WithMaxCompletions(n)` panics when `n <= 0` with `takt: WithMaxCompletions requires n > 0`; `WithMemory(nil)` panics with `takt: WithMemory requires a non-nil CompletionMemory`.
 
-`Backend.Poll([]Completion) (int, error)` reports both the number of ready completions and any infrastructure poll failure. `Loop` treats `iox.ErrWouldBlock` returned by `Poll` as an idle tick rather than a terminal error.
+`Backend.Poll([]Completion) (int, error)` reports both the number of ready completions and any infrastructure poll failure; a backend must not return ready completions together with a non-nil poll-level error. `Loop` treats `iox.ErrWouldBlock` returned by `Poll` as an idle tick rather than a terminal error.
 
 `Loop` is a single-owner runner. Serialize calls that share the same `Loop`, including `SubmitExpr`, `Submit`, `Poll`, `Run`, `Drain`, `Pending`, and `Failed`.
 
-`Backend.Submit` must return a token that is unique among all submissions still live in the loop. If a backend reuses a live token, the loop records `ErrLiveTokenReuse`, drains every pending suspension exactly once, and every subsequent `SubmitExpr` / `Submit` / `Poll` / `Run` call returns that fatal error.
+`Backend.Submit` must return a token that is unique among all submissions still live in the loop. Tokens are correlation keys, not sequence numbers; a concrete backend may use a kernel `user_data` value directly. If a backend reuses a live token, the loop records `ErrLiveTokenReuse`, drains every pending suspension exactly once, and every subsequent `SubmitExpr` / `Submit` / `Poll` / `Run` call returns that fatal error.
 
 When a completion carries `iox.ErrWouldBlock`, the loop resubmits the same operation. If a completion carries `iox.ErrMore` (multishot), the loop records `ErrUnsupportedMultishot`, drains every pending suspension exactly once, and every subsequent `SubmitExpr` / `Submit` / `Poll` / `Run` call returns that fatal error. `ErrMore` means the submitted backend operation remains active after the CQE, while generic `Loop` has no subscription or cancel carrier for later same-token completions.
 
@@ -126,6 +128,43 @@ loop.Submit(contComputation) // kont.Eff
 
 // Drive all to completion
 results, err := loop.Run()
+```
+
+### Stream / Subscription Runner
+
+`SubscriptionLoop` is the sibling runner for route-indexed stream observations. A `SubscriptionBackend` starts an operation with `Subscribe`, polls `StreamCompletion` values, and accepts `Cancel` requests for live routes. `RouteID` pairs a `Token` with a generation so token reuse after finalization does not alias an older live route.
+
+`StreamCompletion.More` means the same route remains live after the observation. `HasValue` and `EventErr` describe payload evidence at that boundary and are independent of `More`: a completion can report a value and more to come, no value and more to come, or a payload error while the route remains live. A completion with `More == false` emits a final `StreamEvent` and retires the route.
+
+`Subscribe` rejects the zero `RouteID` with `ErrInvalidRouteID` and live-route aliasing with `ErrLiveRouteReuse`; both conditions put the stream loop in a fatal state. Poll-level `iox.ErrWouldBlock` is an idle tick. A `SubscriptionBackend` must not return ready stream completions together with a non-nil poll-level error; payload errors belong in `StreamCompletion.EventErr`. Unknown or already retired route completions are stale observations and are ignored. `Cancel` requests route cancellation without retiring the route immediately; a terminal completion, `Drain`, or a fatal loop transition retires it.
+
+```go
+type myStreamBackend struct{ /* ... */ }
+
+func (b *myStreamBackend) Subscribe(op kont.Operation) (takt.RouteID, error) {
+	return takt.NewRouteID(tok, generation), nil
+}
+
+func (b *myStreamBackend) Poll(out []takt.StreamCompletion[int]) (int, error) {
+	// Fill out with route-indexed observations.
+	return n, nil
+}
+
+func (b *myStreamBackend) Cancel(id takt.RouteID) error {
+	// Request cancellation of the live route.
+	return nil
+}
+
+stream := takt.NewSubscriptionLoop[*myStreamBackend, int](
+	backend,
+	takt.WithMaxStreamCompletions(64),
+)
+
+sub, err := stream.Subscribe(op)
+events, err := stream.Poll()
+_ = sub
+_ = events
+_ = err
 ```
 
 `NewLoop` uses [`HeapMemory`](completion_memory.go) as the default completion-buffer provider. Pass [`BoundedMemory`](completion_memory.go) via [`WithMemory`](option.go) when completion buffers should come from a bounded steady-state pool of default-sized 128 KiB slabs; or supply a custom `CompletionMemory` implementation to control allocation strategy without widening the `Backend` or `Completion` contracts. Custom providers must return exclusive non-overlapping live slabs and may treat `Release` as ownership transfer back to the provider:
@@ -195,6 +234,33 @@ loop = takt.NewLoop[*myBackend, int](
 - `ErrLiveTokenReuse`: backend reused a token that was still live in the loop
 - `ErrUnsupportedMultishot`: multishot completion is unsupported by generic `Loop`
 - `ErrDisposed`: loop has been disposed via `Drain`
+
+### Stream Routes
+
+- `RouteID`: stream route identity (`Token` plus generation)
+- `NewRouteID(token Token, generation uint64) RouteID`: construct a route identifier for stream backends
+- `RouteID.Token() Token`: token component
+- `RouteID.Generation() uint64`: generation component
+- `RouteID.IsZero() bool`: reserved invalid-route test
+- `Subscription[A]`: opaque live stream handle
+- `Subscription[A].ID() RouteID`: route identity carried by the handle
+- `Subscription[A].IsZero() bool`: zero, non-live handle test
+- `StreamCompletion[A]`: `{ID, Value, HasValue, EventErr, More}`
+- `StreamCompletion[A].RouteOutcome() iox.Outcome`: projection to `iox` outcome vocabulary
+- `StreamEvent[A]`: `{Subscription, Value, HasValue, Final, EventErr}`
+- `SubscriptionBackend[B, A]`: abstract stream backend interface (`Subscribe`, `Poll`, `Cancel`)
+- `SubscriptionOption`: functional options for `NewSubscriptionLoop`
+- `WithMaxStreamCompletions(n)`: cap the per-poll stream completion buffer
+- `NewSubscriptionLoop[B, A](b B, opts ...SubscriptionOption) *SubscriptionLoop[B, A]`: create a stream runner
+- `(*SubscriptionLoop[B, A]).Subscribe(op kont.Operation) (Subscription[A], error)`: start a route-producing operation
+- `(*SubscriptionLoop[B, A]).Poll() ([]StreamEvent[A], error)`: poll route-indexed events
+- `(*SubscriptionLoop[B, A]).Cancel(sub Subscription[A]) error`: request route cancellation
+- `(*SubscriptionLoop[B, A]).Pending() int`: count live stream routes
+- `(*SubscriptionLoop[B, A]).Failed() error`: terminal fatal error, or nil
+- `(*SubscriptionLoop[B, A]).Drain() int`: cancel or retire owned routes and dispose the stream loop
+- `ErrLiveRouteReuse`: backend reused a route that was still live
+- `ErrInvalidRouteID`: backend returned the reserved zero `RouteID`
+- `ErrUnknownSubscription`: subscription handle is not live in the stream loop
 
 ### Bridge
 
