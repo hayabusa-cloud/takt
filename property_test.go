@@ -103,9 +103,9 @@ func TestPropertyFairnessOrdering(t *testing.T) {
 }
 
 // TestPropertyExecLoopBisimulation checks that, for a deterministic
-// dispatcher and a deterministic program, the three execution modes — Exec,
-// the Step+Advance stepping loop, and Loop.Submit+Run — produce the same final
-// result.
+// dispatcher and a deterministic program, the three execution modes produce
+// the same final result: Exec, the Step+Advance stepping loop, and
+// Loop.Submit+Run.
 func TestPropertyExecLoopBisimulation(t *testing.T) {
 	f := func(seed int) bool {
 		if seed < 0 {
