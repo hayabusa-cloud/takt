@@ -2,10 +2,6 @@
 // Use of this source code is governed by a MIT-style
 // license that can be found in the LICENSE file.
 
-// Dispatcher is the non-blocking execution boundary for one suspended
-// operation. `kont` defines the suspension shape, `iox` classifies progress,
-// and `takt` handles retries and resumption.
-
 package takt
 
 import (
@@ -15,11 +11,12 @@ import (
 	"code.hybscloud.com/kont"
 )
 
-// Dispatcher is the interface for non-blocking operation dispatch.
+// Dispatcher is the non-blocking execution boundary for one suspended
+// operation.
 // Dispatch returns (value, nil) on completion, (value, iox.ErrMore) when
-// progress is made and the operation remains live, (nil, iox.ErrWouldBlock)
-// when no progress is currently possible, or (nil, error) on infrastructure
-// failure.
+// progress was made and the operation reports a live frontier,
+// (nil, iox.ErrWouldBlock) when no progress is currently possible, or
+// (nil, error) on infrastructure failure.
 type Dispatcher[D Dispatcher[D]] interface {
 	Dispatch(op kont.Operation) (kont.Resumed, error)
 }
@@ -29,14 +26,28 @@ type Dispatcher[D Dispatcher[D]] interface {
 // frontiers under one correlation key and break token-to-suspension tracking.
 var ErrLiveTokenReuse = errors.New("takt: backend reused a live token")
 
+// ErrLiveRouteReuse reports that a [SubscriptionBackend] reused a route that
+// is still live in the current [SubscriptionLoop].
+var ErrLiveRouteReuse = errors.New("takt: backend reused a live route")
+
+// ErrInvalidRouteID reports that a [SubscriptionBackend] returned the reserved
+// zero [RouteID].
+var ErrInvalidRouteID = errors.New("takt: backend returned an invalid route id")
+
+// ErrUnknownSubscription reports that a [Subscription] is not live in the
+// current [SubscriptionLoop].
+var ErrUnknownSubscription = errors.New("takt: unknown subscription")
+
 // ErrUnsupportedMultishot reports that a backend produced a multishot
-// completion for [Loop]. ErrMore means the submitted backend operation remains
-// active after the CQE; generic Loop tracks affine one-shot suspensions and has
-// no subscription or cancel carrier for later same-token completions.
+// completion for [Loop]. [iox.ErrMore] means the submitted backend operation
+// remains active after the CQE; generic Loop tracks affine one-shot
+// suspensions and has no subscription or cancel carrier for later same-token
+// completions.
 var ErrUnsupportedMultishot = errors.New("takt: unsupported multishot completion")
 
-// ErrDisposed reports that a Loop has been explicitly disposed via [Loop.Drain]
-// and can no longer accept submissions or produce completions.
+// ErrDisposed reports that a loop has been explicitly disposed via [Loop.Drain]
+// or [SubscriptionLoop.Drain] and can no longer accept submissions or produce
+// completions.
 var ErrDisposed = errors.New("takt: loop disposed")
 
 // dispatchFailed panics on infrastructure failure.
