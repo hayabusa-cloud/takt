@@ -11,13 +11,15 @@ Motor de despacho abstracto, guiado por eventos de finalización, para pilas de 
 
 ## Descripción general
 
-En un modelo proactor, las operaciones de E/S se envían al kernel y sus finalizaciones llegan de forma asíncrona. La aplicación debe correlacionar cada finalización con la computación que la solicitó, reanudar esa computación y manejar éxito, progreso con una frontera viva, readiness/contrapresión sin progreso y fallo.
+En un modelo proactor, las operaciones de E/S se envían al kernel y sus finalizaciones llegan de forma asíncrona. La aplicación debe correlacionar cada finalización con la computación que la solicitó, reanudar esa computación y manejar éxito, progreso con una frontera viva, disponibilidad/contrapresión sin progreso y fallo.
 
 `takt` proporciona este modelo de ejecución como una capa abstracta sobre el sistema de efectos [kont](https://code.hybscloud.com/kont). Un `Dispatcher` evalúa un efecto algebraico a la vez y clasifica el resultado según el álgebra de resultados [iox](https://code.hybscloud.com/iox). Un `Backend` envía operaciones a un motor asíncrono, por ejemplo `io_uring`, y sondea las finalizaciones. `Loop` los integra: envía computaciones, sondea el backend, correlaciona finalizaciones por token y reanuda las continuaciones suspendidas.
 
 Hay dos API equivalentes: `kont.Eff` (basada en clausuras y fácil de componer) y `kont.Expr` (basada en marcos, con menor sobrecarga de asignación en rutas críticas).
 
 La ruta del bucle de eventos guarda una sola suspensión pendiente por cada token vivo. Cada token sigue una suspensión producida por `kont.StepExpr` (o por reificar antes `kont.Eff`), por lo que `Backend.Submit` no debe reutilizar un token mientras el envío anterior que lo porta siga vivo en el bucle.
+
+Para integraciones de estilo stream o multishot, `SubscriptionLoop` proporciona un ejecutor abstracto de rutas separado. Rastrea valores `Subscription` por `RouteID` (`Token` más generación), sondea valores `StreamCompletion`, emite observaciones `StreamEvent` y conserva `More` como evidencia de vida de la ruta independiente del valor de carga o del error de carga. Así el `Loop` genérico sigue siendo afín y de un solo disparo, mientras los entornos de ejecución concretos tienen un lugar explícito para representar observaciones sucesoras de la misma operación.
 
 ## Límite de composición
 
@@ -33,7 +35,7 @@ Requiere Go 1.26+.
 
 ## Clasificación de resultados
 
-Cada operación despachada devuelve un resultado `iox`. `Dispatcher.Dispatch` informa ese resultado como `(value, error)`; los runners bloqueantes y la API de stepping lo interpretan así:
+Cada operación despachada devuelve un resultado `iox`. `Dispatcher.Dispatch` informa ese resultado como `(value, error)`; los ejecutores bloqueantes y la API de stepping lo interpretan así:
 
 | Resultado       | Significado                      | Retorno Dispatcher      | Comportamiento bloqueante/stepping          |
 |-----------------|----------------------------------|-------------------------|---------------------------------------------|
@@ -106,11 +108,11 @@ if susp != nil {
 
 Un `Loop` conduce computaciones a través de un `Backend`. Envía operaciones, sondea finalizaciones, las correlaciona por `Token` y reanuda las continuaciones suspendidas. `NewLoop` acepta `Option` funcionales. `WithMaxCompletions(n)` entra en pánico si `n <= 0` con `takt: WithMaxCompletions requires n > 0`; `WithMemory(nil)` entra en pánico con `takt: WithMemory requires a non-nil CompletionMemory`.
 
-`Backend.Poll([]Completion) (int, error)` informa tanto el número de finalizaciones listas como cualquier fallo de infraestructura del sondeo. El `Loop` trata un `iox.ErrWouldBlock` devuelto por `Poll` como un ciclo en vacío y no como un error terminal.
+`Backend.Poll([]Completion) (int, error)` informa tanto el número de finalizaciones listas como cualquier fallo de infraestructura del sondeo; un backend no debe devolver finalizaciones listas junto con un error de sondeo distinto de nil. El `Loop` trata un `iox.ErrWouldBlock` devuelto por `Poll` como un ciclo en vacío y no como un error terminal.
 
-`Loop` es un runner de propietario único. Serialice las llamadas que comparten el mismo `Loop`, incluidas `SubmitExpr`, `Submit`, `Poll`, `Run`, `Drain`, `Pending` y `Failed`.
+`Loop` es un ejecutor de propietario único. Serialice las llamadas que comparten el mismo `Loop`, incluidas `SubmitExpr`, `Submit`, `Poll`, `Run`, `Drain`, `Pending` y `Failed`.
 
-`Backend.Submit` debe devolver un token que sea único entre todos los envíos que sigan vivos en el bucle. Si un backend reutiliza un token vivo, el bucle registra `ErrLiveTokenReuse`, descarta cada suspensión pendiente exactamente una vez y toda llamada posterior a `SubmitExpr` / `Submit` / `Poll` / `Run` devuelve ese error fatal.
+`Backend.Submit` debe devolver un token que sea único entre todos los envíos que sigan vivos en el bucle. Los tokens son claves de correlación, no números de secuencia; un backend concreto puede usar directamente un valor kernel `user_data`. Si un backend reutiliza un token vivo, el bucle registra `ErrLiveTokenReuse`, descarta cada suspensión pendiente exactamente una vez y toda llamada posterior a `SubmitExpr` / `Submit` / `Poll` / `Run` devuelve ese error fatal.
 
 Cuando una finalización trae `iox.ErrWouldBlock`, el bucle reenvía la misma operación. Si una finalización trae `iox.ErrMore` (multishot), el bucle registra `ErrUnsupportedMultishot`, descarta cada suspensión pendiente exactamente una vez y toda llamada posterior a `SubmitExpr` / `Submit` / `Poll` / `Run` devuelve ese error fatal. `ErrMore` significa que la operación de backend enviada sigue activa después de la CQE, mientras que el `Loop` genérico no tiene un portador de suscripción o cancelación para finalizaciones posteriores con el mismo token.
 
@@ -128,13 +130,50 @@ loop.Submit(contComputation) // kont.Eff
 results, err := loop.Run()
 ```
 
+### Ejecutor de stream / suscripción
+
+`SubscriptionLoop` es el ejecutor hermano para observaciones de stream indexadas por ruta. Un `SubscriptionBackend` inicia una operación con `Subscribe`, sondea valores `StreamCompletion` y acepta solicitudes `Cancel` para rutas vivas. `RouteID` empareja un `Token` con una generación para que la reutilización de tokens tras la finalización no se confunda con una ruta viva anterior.
+
+`StreamCompletion.More` significa que la misma ruta permanece viva después de la observación. `HasValue` y `EventErr` describen evidencia de carga en ese límite y son independientes de `More`: una finalización puede informar un valor y más por venir, ningún valor y más por venir, o un error de carga mientras la ruta sigue viva. Una finalización con `More == false` emite un `StreamEvent` final y retira la ruta.
+
+`Subscribe` rechaza el `RouteID` cero con `ErrInvalidRouteID` y el aliasing de rutas vivas con `ErrLiveRouteReuse`; ambas condiciones ponen el bucle de stream en estado fatal. Un `iox.ErrWouldBlock` a nivel de sondeo es un ciclo en vacío. Un `SubscriptionBackend` no debe devolver finalizaciones de stream listas junto con un error de sondeo distinto de nil; los errores de carga pertenecen a `StreamCompletion.EventErr`. Las finalizaciones de rutas desconocidas o ya retiradas son observaciones obsoletas y se ignoran. `Cancel` solicita la cancelación de la ruta sin retirarla de inmediato; una finalización terminal, `Drain` o una transición fatal del bucle la retira.
+
+```go
+type myStreamBackend struct{ /* ... */ }
+
+func (b *myStreamBackend) Subscribe(op kont.Operation) (takt.RouteID, error) {
+	return takt.NewRouteID(tok, generation), nil
+}
+
+func (b *myStreamBackend) Poll(out []takt.StreamCompletion[int]) (int, error) {
+	// Rellenar out con observaciones indexadas por ruta.
+	return n, nil
+}
+
+func (b *myStreamBackend) Cancel(id takt.RouteID) error {
+	// Solicitar cancelación de la ruta viva.
+	return nil
+}
+
+stream := takt.NewSubscriptionLoop[*myStreamBackend, int](
+	backend,
+	takt.WithMaxStreamCompletions(64),
+)
+
+sub, err := stream.Subscribe(op)
+events, err := stream.Poll()
+_ = sub
+_ = events
+_ = err
+```
+
 `NewLoop` usa [`HeapMemory`](completion_memory.go) como proveedor predeterminado del búfer de finalizaciones. Si quiere que esos búferes provengan de un pool acotado y estable de slabs de 128 KiB de tamaño predeterminado, pase [`BoundedMemory`](completion_memory.go) mediante [`WithMemory`](option.go); o proporcione cualquier implementación de `CompletionMemory` para controlar la estrategia de asignación sin ampliar los contratos de `Backend` ni de `Completion`. Los proveedores personalizados deben devolver slabs vivos exclusivos y no solapados, y pueden tratar `Release` como una transferencia de propiedad de vuelta al proveedor:
 
 ```go
 // Por defecto: HeapMemory + slab de finalizaciones de tamaño por defecto.
 loop := takt.NewLoop[*myBackend, int](backend)
 
-// Limita la longitud del slab de finalizaciones por sondeo (Memory sigue eligiendo la forma del slab; Loop recorta la longitud visible a este tope).
+// Limita la longitud del slab de finalizaciones por sondeo (el proveedor elige la forma del slab; Loop recorta la longitud visible a este tope).
 loop = takt.NewLoop[*myBackend, int](backend, takt.WithMaxCompletions(64))
 
 // Comparte el sync.Pool de un mismo HeapMemory entre varios Loops pasando la misma dirección a WithMemory; copiar un valor HeapMemory no compartiría los slabs reciclados.
@@ -195,6 +234,33 @@ loop = takt.NewLoop[*myBackend, int](
 - `ErrLiveTokenReuse`: el backend reutilizó un token que seguía vivo en el bucle
 - `ErrUnsupportedMultishot`: el `Loop` genérico no admite finalizaciones multishot
 - `ErrDisposed`: el bucle ha sido desechado mediante `Drain`
+
+### Rutas de stream
+
+- `RouteID`: identidad de ruta de stream (`Token` más generación)
+- `NewRouteID(token Token, generation uint64) RouteID`: construye un identificador de ruta para backends de stream
+- `RouteID.Token() Token`: componente token
+- `RouteID.Generation() uint64`: componente generación
+- `RouteID.IsZero() bool`: prueba de ruta reservada inválida
+- `Subscription[A]`: descriptor opaco de stream vivo
+- `Subscription[A].ID() RouteID`: identidad de ruta transportada por el descriptor
+- `Subscription[A].IsZero() bool`: prueba de descriptor cero y no vivo
+- `StreamCompletion[A]`: `{ID, Value, HasValue, EventErr, More}`
+- `StreamCompletion[A].RouteOutcome() iox.Outcome`: proyección al vocabulario de resultados `iox`
+- `StreamEvent[A]`: `{Subscription, Value, HasValue, Final, EventErr}`
+- `SubscriptionBackend[B, A]`: interfaz abstracta de backend de stream (`Subscribe`, `Poll`, `Cancel`)
+- `SubscriptionOption`: opciones funcionales para `NewSubscriptionLoop`
+- `WithMaxStreamCompletions(n)`: acota el búfer de finalizaciones de stream por sondeo
+- `NewSubscriptionLoop[B, A](b B, opts ...SubscriptionOption) *SubscriptionLoop[B, A]`: crea un ejecutor de stream
+- `(*SubscriptionLoop[B, A]).Subscribe(op kont.Operation) (Subscription[A], error)`: inicia una operación que produce una ruta
+- `(*SubscriptionLoop[B, A]).Poll() ([]StreamEvent[A], error)`: sondea eventos indexados por ruta
+- `(*SubscriptionLoop[B, A]).Cancel(sub Subscription[A]) error`: solicita cancelación de ruta
+- `(*SubscriptionLoop[B, A]).Pending() int`: cuenta rutas de stream vivas
+- `(*SubscriptionLoop[B, A]).Failed() error`: error fatal terminal, o nil
+- `(*SubscriptionLoop[B, A]).Drain() int`: cancela o retira rutas propias y desecha el bucle de stream
+- `ErrLiveRouteReuse`: el backend reutilizó una ruta que seguía viva
+- `ErrInvalidRouteID`: el backend devolvió el `RouteID` cero reservado
+- `ErrUnknownSubscription`: el descriptor de suscripción no está vivo en el bucle de stream
 
 ### Puente
 

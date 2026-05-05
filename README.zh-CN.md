@@ -19,6 +19,8 @@
 
 事件循环路径为每个存活 token 只保存一个挂起。每个 token 跟踪由 `kont.StepExpr`（或先将 `kont.Eff` reify 之后）产生的挂起，因此 `Backend.Submit` 不能在旧提交仍然存活于循环中时复用该 token。
 
+对于流式或 multishot 风格的集成，`SubscriptionLoop` 提供单独的抽象路由运行器。它通过 `RouteID`（`Token` 加 generation）跟踪 `Subscription` 句柄，轮询 `StreamCompletion` 值，发出 `StreamEvent` 观察，并把 `More` 保持为独立于载荷值和载荷错误的路由存活证据。这让通用 `Loop` 保持仿射、一次性，同时为具体运行时表示同一操作的后继观察提供明确位置。
+
 ## 组合边界
 
 `takt` 只拥有执行推进，不拥有上下文含义或结果词汇。`iox` 对 `nil`、`ErrWouldBlock`、`ErrMore` 与失败进行分类；`kont` 拥有挂起/恢复载体；`cove` 可以通过 `SuspensionView` 为挂起包裹显式上下文；`takt` 推进任何满足 `SuspensionLike` 的值，但不解释该上下文。
@@ -33,7 +35,7 @@ go get code.hybscloud.com/takt
 
 ## 结果分类
 
-每个被调度的操作都会返回一个 `iox` 结果。`Dispatcher.Dispatch` 以 `(value, error)` 报告该结果；阻塞 runner 和步进 API 对其解释如下：
+每个被调度的操作都会返回一个 `iox` 结果。`Dispatcher.Dispatch` 以 `(value, error)` 报告该结果；阻塞运行器和步进 API 对其解释如下：
 
 | 结果              | 含义         | Dispatcher 返回         | 阻塞/步进行为                   |
 |-----------------|------------|-----------------------|---------------------------|
@@ -106,11 +108,11 @@ if susp != nil {
 
 `Loop` 通过 `Backend` 驱动计算。它提交操作、轮询完成事件、通过 `Token` 进行关联，并恢复挂起的续延。`NewLoop` 接受函数式 `Option`。`WithMaxCompletions(n)` 在 `n <= 0` 时会以 `takt: WithMaxCompletions requires n > 0` panic；`WithMemory(nil)` 会以 `takt: WithMemory requires a non-nil CompletionMemory` panic。
 
-`Backend.Poll([]Completion) (int, error)` 同时报告就绪完成事件的数量以及基础设施层面的轮询失败。`Loop` 会把 `Poll` 返回的 `iox.ErrWouldBlock` 视为空闲轮询，而不是终止性错误。
+`Backend.Poll([]Completion) (int, error)` 同时报告就绪完成事件的数量以及基础设施层面的轮询失败；后端不得在返回非 nil 的轮询层 error 时同时返回就绪完成事件。`Loop` 会把 `Poll` 返回的 `iox.ErrWouldBlock` 视为空闲轮询，而不是终止性错误。
 
-`Loop` 是单所有者 runner。共享同一个 `Loop` 的调用必须串行化，包括 `SubmitExpr`、`Submit`、`Poll`、`Run`、`Drain`、`Pending` 和 `Failed`。
+`Loop` 是单一所有者运行器。共享同一个 `Loop` 的调用必须串行化，包括 `SubmitExpr`、`Submit`、`Poll`、`Run`、`Drain`、`Pending` 和 `Failed`。
 
-`Backend.Submit` 必须在循环中所有仍然存活的提交之间返回唯一 token。如果后端复用了一个存活 token，循环会记录 `ErrLiveTokenReuse`，将所有挂起恰好丢弃一次，并使后续所有 `SubmitExpr` / `Submit` / `Poll` / `Run` 调用都返回该致命错误。
+`Backend.Submit` 必须在循环中所有仍然存活的提交之间返回唯一 token。token 是关联键，不是序列号；具体后端可以直接使用 kernel `user_data` 值。如果后端复用了一个存活 token，循环会记录 `ErrLiveTokenReuse`，将所有挂起恰好丢弃一次，并使后续所有 `SubmitExpr` / `Submit` / `Poll` / `Run` 调用都返回该致命错误。
 
 当完成事件携带 `iox.ErrWouldBlock` 时，循环会重新提交同一操作。如果完成事件携带 `iox.ErrMore`（多次触发），循环会记录 `ErrUnsupportedMultishot`，将所有挂起恰好丢弃一次，并使后续所有 `SubmitExpr` / `Submit` / `Poll` / `Run` 调用都返回该致命错误。`ErrMore` 表示提交的后端操作在 CQE 之后仍然存活，而通用 `Loop` 没有用于后续同 token 完成事件的订阅或取消载体。
 
@@ -126,6 +128,43 @@ loop.Submit(contComputation) // kont.Eff
 
 // 驱动至全部完成
 results, err := loop.Run()
+```
+
+### 流/订阅运行器
+
+`SubscriptionLoop` 是面向按路由索引的流观察的同级运行器。`SubscriptionBackend` 使用 `Subscribe` 启动一个操作，轮询 `StreamCompletion` 值，并接收针对存活路由的 `Cancel` 请求。`RouteID` 将 `Token` 与 generation 组合起来，因此 token 在最终化后复用时不会别名到更早的存活路由。
+
+`StreamCompletion.More` 表示同一路由在该观察之后仍然存活。`HasValue` 和 `EventErr` 描述该边界上的载荷证据，并且独立于 `More`：一个完成事件可以报告值且还有后续、没有值但还有后续，或者在路由仍然存活时报告载荷错误。`More == false` 的完成事件会发出最终 `StreamEvent` 并退休该路由。
+
+`Subscribe` 会用 `ErrInvalidRouteID` 拒绝零 `RouteID`，并用 `ErrLiveRouteReuse` 拒绝存活路由别名；两者都会使流循环进入致命状态。轮询层面的 `iox.ErrWouldBlock` 是空闲轮询。`SubscriptionBackend` 不得在返回非 nil 的轮询层 error 时同时返回就绪的流完成事件；载荷错误应放在 `StreamCompletion.EventErr`。未知或已经退休的路由完成事件是陈旧观察，会被忽略。`Cancel` 请求取消路由，但不会立即退休该路由；终端完成事件、`Drain` 或致命循环转换会退休它。
+
+```go
+type myStreamBackend struct{ /* ... */ }
+
+func (b *myStreamBackend) Subscribe(op kont.Operation) (takt.RouteID, error) {
+	return takt.NewRouteID(tok, generation), nil
+}
+
+func (b *myStreamBackend) Poll(out []takt.StreamCompletion[int]) (int, error) {
+	// 填充按路由索引的观察。
+	return n, nil
+}
+
+func (b *myStreamBackend) Cancel(id takt.RouteID) error {
+	// 请求取消存活路由。
+	return nil
+}
+
+stream := takt.NewSubscriptionLoop[*myStreamBackend, int](
+	backend,
+	takt.WithMaxStreamCompletions(64),
+)
+
+sub, err := stream.Subscribe(op)
+events, err := stream.Poll()
+_ = sub
+_ = events
+_ = err
 ```
 
 `NewLoop` 默认使用 [`HeapMemory`](completion_memory.go) 作为完成事件缓冲区的提供器。如果希望这些缓冲区来自一个保存默认尺寸 128 KiB slab 的有界稳态池，可以通过 [`WithMemory`](option.go) 传入 [`BoundedMemory`](completion_memory.go)；也可以实现自定义 `CompletionMemory`，在不扩展 `Backend` 与 `Completion` 契约的前提下控制分配策略。自定义提供器必须返回彼此独占且不重叠的存活 slab，并且可以把 `Release` 视为所有权回交给提供器：
@@ -195,6 +234,33 @@ loop = takt.NewLoop[*myBackend, int](
 - `ErrLiveTokenReuse`: 后端复用了一个在循环中仍然存活的 token
 - `ErrUnsupportedMultishot`: 通用 `Loop` 不支持多次触发完成
 - `ErrDisposed`: 循环已通过 `Drain` 废弃
+
+### 流路由
+
+- `RouteID`: 流路由身份（`Token` 加 generation）
+- `NewRouteID(token Token, generation uint64) RouteID`: 为流后端构造路由标识符
+- `RouteID.Token() Token`: token 组成部分
+- `RouteID.Generation() uint64`: generation 组成部分
+- `RouteID.IsZero() bool`: 保留的无效路由测试
+- `Subscription[A]`: 不透明的存活流句柄
+- `Subscription[A].ID() RouteID`: 该句柄携带的路由身份
+- `Subscription[A].IsZero() bool`: 零值、非存活句柄测试
+- `StreamCompletion[A]`: `{ID, Value, HasValue, EventErr, More}`
+- `StreamCompletion[A].RouteOutcome() iox.Outcome`: 投影到 `iox` 结果词汇
+- `StreamEvent[A]`: `{Subscription, Value, HasValue, Final, EventErr}`
+- `SubscriptionBackend[B, A]`: 抽象流后端接口（`Subscribe`, `Poll`, `Cancel`）
+- `SubscriptionOption`: `NewSubscriptionLoop` 的函数式选项
+- `WithMaxStreamCompletions(n)`: 限制每次轮询的流完成事件缓冲区
+- `NewSubscriptionLoop[B, A](b B, opts ...SubscriptionOption) *SubscriptionLoop[B, A]`: 创建流运行器
+- `(*SubscriptionLoop[B, A]).Subscribe(op kont.Operation) (Subscription[A], error)`: 启动产生路由的操作
+- `(*SubscriptionLoop[B, A]).Poll() ([]StreamEvent[A], error)`: 轮询按路由索引的事件
+- `(*SubscriptionLoop[B, A]).Cancel(sub Subscription[A]) error`: 请求取消路由
+- `(*SubscriptionLoop[B, A]).Pending() int`: 存活流路由数量
+- `(*SubscriptionLoop[B, A]).Failed() error`: 终端致命错误；未发生时为 nil
+- `(*SubscriptionLoop[B, A]).Drain() int`: 取消或退休已拥有路由，并废弃流循环
+- `ErrLiveRouteReuse`: 后端复用了仍然存活的路由
+- `ErrInvalidRouteID`: 后端返回了保留的零 `RouteID`
+- `ErrUnknownSubscription`: 订阅句柄在流循环中并非存活
 
 ### 桥接
 
