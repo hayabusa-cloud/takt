@@ -4,10 +4,6 @@
 
 package takt
 
-// AdvanceSuspension and Advance expose the package's manual stepping API.
-// [Exec] blocks until completion, while [Loop] drives the same suspension
-// sequence through submit/poll calls.
-
 import (
 	"code.hybscloud.com/iox"
 	"code.hybscloud.com/kont"
@@ -29,6 +25,8 @@ func Step[R any](m kont.Expr[R]) (R, *kont.Suspension[R]) {
 }
 
 // AdvanceSuspension dispatches one suspended operation through a Dispatcher.
+// [Exec] blocks over the same operation sequence, while [Loop] drives it
+// through submit/poll calls.
 // A nil dispatch error and [iox.ErrMore] resume the suspension and return the
 // next frontier. [iox.ErrWouldBlock] and ordinary failure return the original
 // suspension value unchanged.

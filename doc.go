@@ -19,6 +19,7 @@
 //
 //   - Stepping: [AdvanceSuspension] and [Advance] dispatch one observed suspension at a time
 //   - Event loop: [Loop] drives computations through a [Backend] (submit/poll)
+//   - Stream loop: [SubscriptionLoop] drives route-indexed stream observations through a [SubscriptionBackend]
 //
 // # Convenience Surface
 //
@@ -30,7 +31,7 @@
 //     [code.hybscloud.com/cove.SuspensionView] without making takt own their
 //     context
 //   - Bridge helpers: [Step] reuses [code.hybscloud.com/kont.StepExpr]; [Reify] and [Reflect] re-export the `kont` conversions so callers do not need a second import
-//   - Lifecycle: [Loop.Failed], [Loop.Drain], [ErrDisposed], [ErrLiveTokenReuse], and [ErrUnsupportedMultishot] expose the terminal fatal state
+//   - Lifecycle: [Loop.Failed], [Loop.Drain], [SubscriptionLoop.Failed], [SubscriptionLoop.Drain], [ErrDisposed], [ErrLiveTokenReuse], [ErrLiveRouteReuse], and [ErrUnsupportedMultishot] expose terminal fatal states
 //
 // # iox Classification
 //
@@ -57,14 +58,29 @@
 // operation, so multishot stream ownership belongs in a concrete layer above
 // takt.
 //
+// [SubscriptionLoop] is the abstract stream counterpart to [Loop]. It uses a
+// [RouteID] made from a [Token] and generation, returns opaque [Subscription]
+// handles, and polls [StreamCompletion] values. [StreamCompletion.More] is
+// route-liveness evidence: when it is true, [SubscriptionLoop.Poll] emits a
+// non-final [StreamEvent] and keeps the route live; when it is false, Poll emits
+// a final event and retires the route. [StreamCompletion.HasValue] and
+// [StreamCompletion.EventErr] describe payload evidence at that boundary and
+// are independent of More, so an empty live boundary and a payload error on a
+// still-live route are both representable without collapsing them into
+// terminal success or failure. Poll-level [code.hybscloud.com/iox.ErrWouldBlock]
+// remains idle/no mutation. A [SubscriptionBackend] must not return ready stream
+// completions together with a non-nil poll-level error; payload errors belong in
+// [StreamCompletion.EventErr]. Stale completions for already retired routes are
+// ignored.
+//
 // [CompletionMemory] supplies the [Completion] slice that a [Loop] passes to
-// [Backend.Poll]. Use [NewLoop] with [Option]s: [WithMemory] installs a custom
-// provider, [WithMaxCompletions] caps the visible slice length, [HeapMemory] is
-// the default, and [BoundedMemory] provides a single bounded pool of
-// default-sized 128 KiB slabs. [Loop.Drain] releases that slice exactly once
-// through [CompletionMemory.Release]. Custom providers must hand each live loop
-// an exclusive non-overlapping slab and may treat Release as ownership transfer
-// back to the provider.
+// [Backend.Poll]. Use [NewLoop] with functional options: [WithMemory] installs
+// a custom provider, [WithMaxCompletions] caps the visible slice length,
+// [HeapMemory] is the default, and [BoundedMemory] provides a single bounded
+// pool of default-sized 128 KiB slabs. [Loop.Drain] releases that slice exactly
+// once through [CompletionMemory.Release]. Custom providers must hand each live
+// loop an exclusive non-overlapping slab and may treat Release as ownership
+// transfer back to the provider.
 //
 // # Error Handling
 //
