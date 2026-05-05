@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	code.hybscloud.com/cove v0.1.1
-	code.hybscloud.com/iobuf v0.3.2
+	code.hybscloud.com/iobuf v0.3.3
 	code.hybscloud.com/iox v0.3.6
 	code.hybscloud.com/kont v0.1.8
 	code.hybscloud.com/spin v0.1.6
