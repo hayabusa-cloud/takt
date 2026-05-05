@@ -52,7 +52,7 @@ go get code.hybscloud.com/takt
 type myDispatcher struct{ /* ... */ }
 
 func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-	// 派发 op，并返回 (value, nil) 或 (nil, iox.ErrWouldBlock)
+	// 派发 op，并返回 (value, nil)、(value, iox.ErrMore) 或 (nil, iox.ErrWouldBlock)
 }
 ```
 
@@ -210,7 +210,7 @@ loop = takt.NewLoop[*myBackend, int](
 type myDispatcher struct{ /* ... */ }
 
 func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-	// 完成时返回 (value, nil)，需要让出时返回 (nil, iox.ErrWouldBlock)。
+	// 返回 (value, nil)、(value, iox.ErrMore) 或 (nil, iox.ErrWouldBlock)。
 }
 
 // 2. 定义 backend：将操作提交到 OS proactor，并轮询完成事件。

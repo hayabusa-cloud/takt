@@ -52,7 +52,7 @@ Go 1.26 以降が必要です。
 type myDispatcher struct{ /* ... */ }
 
 func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-	// op をディスパッチし、(value, nil) または (nil, iox.ErrWouldBlock) を返す
+	// op をディスパッチし、(value, nil)、(value, iox.ErrMore)、または (nil, iox.ErrWouldBlock) を返す
 }
 ```
 
@@ -210,7 +210,7 @@ loop = takt.NewLoop[*myBackend, int](
 type myDispatcher struct{ /* ... */ }
 
 func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-	// 完了時は (value, nil)、譲る必要があるときは (nil, iox.ErrWouldBlock) を返す。
+	// (value, nil)、(value, iox.ErrMore)、または (nil, iox.ErrWouldBlock) を返す。
 }
 
 // 2. backend を定義する: OS プロアクターに操作を提出し、完了をポーリングする。

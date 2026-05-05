@@ -52,7 +52,7 @@ Un `Dispatcher` mapea cada efecto algebraico a una operación de E/S concreta y 
 type myDispatcher struct{ /* ... */ }
 
 func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-	// despachar op; devolver (value, nil) o (nil, iox.ErrWouldBlock)
+	// despachar op; devolver (value, nil), (value, iox.ErrMore) o (nil, iox.ErrWouldBlock)
 }
 ```
 
@@ -210,7 +210,7 @@ Una integración completa con un bucle de eventos combina un `Dispatcher` (la se
 type myDispatcher struct{ /* ... */ }
 
 func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-	// Devolver (value, nil) al completar o (nil, iox.ErrWouldBlock) para ceder.
+	// Devolver (value, nil), (value, iox.ErrMore) o (nil, iox.ErrWouldBlock).
 }
 
 // 2. Definir el backend: envía operaciones al proactor del SO y sondea finalizaciones.

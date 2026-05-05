@@ -52,7 +52,7 @@ A `Dispatcher` maps each algebraic effect to a concrete I/O operation and return
 type myDispatcher struct{ /* ... */ }
 
 func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-	// dispatch op, return (value, nil) or (nil, iox.ErrWouldBlock)
+	// dispatch op; return (value, nil), (value, iox.ErrMore), or (nil, iox.ErrWouldBlock)
 }
 ```
 
@@ -210,7 +210,7 @@ A complete event-loop integration combines a `Dispatcher` (the synchronous seman
 type myDispatcher struct{ /* ... */ }
 
 func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-	// Return (value, nil) on completion or (nil, iox.ErrWouldBlock) to yield.
+	// Return (value, nil), (value, iox.ErrMore), or (nil, iox.ErrWouldBlock).
 }
 
 // 2. Define the backend: submits ops to the OS proactor and polls completions.
