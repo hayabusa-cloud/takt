@@ -53,7 +53,12 @@ func ExecErrorExpr[E any, D Dispatcher[D], R any](d D, m kont.Expr[R]) kont.Eith
 }
 
 func rightUnwind[E, R any](_, _, _, current kont.Erased) (kont.Erased, kont.Frame) {
-	return kont.Erased(kont.Right[E, R](current.(R))), kont.ReturnFrame{}
+	// Preserve kont's terminal nil-to-zero convention before wrapping the result.
+	var result R
+	if current != nil {
+		result = current.(R)
+	}
+	return kont.Erased(kont.Right[E, R](result)), kont.ReturnFrame{}
 }
 
 // wrapRight converts an Expr[R] into Expr[Either[E, R]] using a pooled UnwindFrame.
@@ -76,7 +81,7 @@ func StepError[E, R any](m kont.Expr[R]) (kont.Either[E, R], *kont.Suspension[ko
 // Throw discards the suspension and returns Left; other operations go through
 // the dispatcher with the usual `iox` classification. A nil dispatch error and
 // [iox.ErrMore] resume the suspension; [iox.ErrWouldBlock] and ordinary failure
-// return it unchanged.
+// return it unchanged. Wrapped errors follow [iox.Classify].
 func AdvanceError[E any, D Dispatcher[D], R any](d D, susp *kont.Suspension[kont.Either[E, R]]) (kont.Either[E, R], *kont.Suspension[kont.Either[E, R]], error) {
 	// Error operations are handled eagerly.
 	if eop, ok := susp.Op().(interface {

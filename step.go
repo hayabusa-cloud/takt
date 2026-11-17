@@ -29,7 +29,11 @@ func Step[R any](m kont.Expr[R]) (R, *kont.Suspension[R]) {
 // through submit/poll calls.
 // A nil dispatch error and [iox.ErrMore] resume the suspension and return the
 // next frontier. [iox.ErrWouldBlock] and ordinary failure return the original
-// suspension value unchanged.
+// suspension value unchanged; any partial progress remains with the dispatcher.
+// Wrapped errors follow [iox.Classify], with WouldBlock taking precedence.
+// A successful resumption may expose another suspension, so the result is final
+// only when the returned carrier denotes completion. The caller retains the
+// returned suspension on every path, including ordinary failure.
 func AdvanceSuspension[D Dispatcher[D], S SuspensionLike[S, R], R any](d D, susp S) (R, S, error) {
 	v, err := d.Dispatch(susp.Op())
 	if iox.IsProgress(err) {

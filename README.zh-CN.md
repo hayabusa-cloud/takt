@@ -39,10 +39,14 @@ go get code.hybscloud.com/takt
 
 | 结果              | 含义         | Dispatcher 返回         | 阻塞/步进行为                   |
 |-----------------|------------|-----------------------|---------------------------|
-| `nil`           | 已完成        | `(value, nil)`        | 恢复                        |
-| `ErrMore`       | 带存活前沿的进展 | `(value, ErrMore)`    | 恢复；步进返回 `ErrMore`          |
-| `ErrWouldBlock` | 无进展        | `(nil, ErrWouldBlock)` | 阻塞等待；步进返回挂起               |
+| `nil`           | 有效回复 | `(value, nil)`        | 恢复                        |
+| `ErrMore`       | 有效回复；交互仍存活 | `(value, ErrMore)`    | 恢复；步进返回 `ErrMore`          |
+| `ErrWouldBlock` | 暂无回复；稍后重试 | `(nil, ErrWouldBlock)` | 阻塞等待；步进返回挂起               |
 | 其他              | 基础设施故障     | `(nil, error)`        | 阻塞 panic；步进返回错误            |
+
+此表描述 Dispatcher 的回复契约。`iox` 控制值本身不表示传输字节数，也不证明资源已释放；返回 WouldBlock 时，部分工作必须保留在 dispatcher 中。
+
+分派遵循 `iox.Classify`，包括包装后的错误。同时匹配 `ErrWouldBlock` 和 `ErrMore` 的错误归类为 WouldBlock：保留挂起，稍后重试。
 
 ## 用法
 
@@ -75,14 +79,11 @@ result := takt.ExecExpr(d, exprComputation) // kont.Expr
 
 ```go
 result, susp := takt.Step[int](exprComputation)
+var err error
 if susp != nil {
-	var err error
 	result, susp, err = takt.Advance(d, susp)
-	if iox.IsWouldBlock(err) {
-		return susp // 将控制权交还给事件循环，待就绪后重新调度
-	}
 }
-// result 即最终值
+// 只有 susp == nil 时 result 才是最终值。否则保留 susp，并在下一次推进前处理 err。
 ```
 
 ### 错误处理
@@ -91,17 +92,14 @@ if susp != nil {
 
 ```go
 either := takt.ExecError[string](d, computation)
-// 成功时为 Right，Throw 时为 Left
+// Right on success, Left on Throw
 
-// 带错误的步进
 either, susp := takt.StepError[string, int](exprComputation)
+var err error
 if susp != nil {
-	var err error
 	either, susp, err = takt.AdvanceError[string](d, susp)
-	if iox.IsWouldBlock(err) {
-		return susp // 将控制权交还给事件循环，待就绪后重新调度
-	}
 }
+// 只有 susp == nil 时 either 才是最终值。WouldBlock 或基础设施故障时应保留挂起。
 ```
 
 ### 事件循环

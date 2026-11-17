@@ -39,10 +39,14 @@ Go 1.26 以降が必要です。
 
 | アウトカム           | 意味            | Dispatcher の戻り値         | ブロッキング/ステッピング動作                         |
 |-----------------|---------------|--------------------------|-------------------------------------------|
-| `nil`           | 完了            | `(value, nil)`           | 再開                                        |
-| `ErrMore`       | 生存中フロンティアを伴う進行 | `(value, ErrMore)`       | 再開し、ステッピングでは `ErrMore` を返す                 |
-| `ErrWouldBlock` | 進行なし          | `(nil, ErrWouldBlock)`   | ブロッキングは待機し、ステッピングはサスペンションを返す           |
+| `nil`           | 有効な応答 | `(value, nil)`           | 再開                                        |
+| `ErrMore`       | 有効な応答；処理は継続中 | `(value, ErrMore)`       | 再開し、ステッピングでは `ErrMore` を返す                 |
+| `ErrWouldBlock` | 現在は応答なし；後で再試行 | `(nil, ErrWouldBlock)`   | ブロッキングは待機し、ステッピングはサスペンションを返す           |
 | その他             | インフラ障害        | `(nil, error)`           | ブロッキングは panic し、ステッピングはエラーを返す             |
+
+この表は Dispatcher の応答契約を示します。`iox` の制御値だけでは転送バイト数やリソース解放を判断できません。WouldBlock を返す際、部分的な仕事は dispatcher が保持します。
+
+ディスパッチはラップされたエラーを含めて `iox.Classify` に従います。`ErrWouldBlock` と `ErrMore` の両方に一致するエラーは WouldBlock と分類され、サスペンションを保持して後で再試行します。
 
 ## 使い方
 
@@ -75,14 +79,11 @@ proactor イベントループ、たとえば `io_uring` 向けに、`Step` と 
 
 ```go
 result, susp := takt.Step[int](exprComputation)
+var err error
 if susp != nil {
-	var err error
 	result, susp, err = takt.Advance(d, susp)
-	if iox.IsWouldBlock(err) {
-		return susp // イベントループへ制御を戻し、準備できたら再スケジュールする
-	}
 }
-// result が最終結果
+// susp == nil のときだけ result は最終値です。それ以外は susp を保持し、次に進める前に err を処理します。
 ```
 
 ### エラー処理
@@ -91,17 +92,14 @@ if susp != nil {
 
 ```go
 either := takt.ExecError[string](d, computation)
-// 成功時は Right、Throw 時は Left
+// Right on success, Left on Throw
 
-// エラー付きステッピング
 either, susp := takt.StepError[string, int](exprComputation)
+var err error
 if susp != nil {
-	var err error
 	either, susp, err = takt.AdvanceError[string](d, susp)
-	if iox.IsWouldBlock(err) {
-		return susp // イベントループへ制御を戻し、準備できたら再スケジュールする
-	}
 }
+// susp == nil のときだけ either は最終値です。WouldBlock や基盤エラー時もサスペンションを保持します。
 ```
 
 ### イベントループ

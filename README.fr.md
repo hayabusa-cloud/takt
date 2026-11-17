@@ -39,10 +39,14 @@ Chaque opération dispatchée renvoie un résultat `iox`. `Dispatcher.Dispatch` 
 
 | Résultat        | Signification                 | Retour Dispatcher       | Comportement bloquant/stepping                       |
 |-----------------|-------------------------------|-------------------------|------------------------------------------------------|
-| `nil`           | terminé                       | `(value, nil)`          | reprend                                              |
-| `ErrMore`       | progrès avec frontière vivante | `(value, ErrMore)`      | reprend ; le stepping renvoie `ErrMore`              |
-| `ErrWouldBlock` | aucun progrès                 | `(nil, ErrWouldBlock)`  | le bloquant attend ; le stepping renvoie la suspension |
+| `nil`           | réponse valide | `(value, nil)`          | reprend                                              |
+| `ErrMore`       | réponse valide ; interaction active | `(value, ErrMore)`      | reprend ; le stepping renvoie `ErrMore`              |
+| `ErrWouldBlock` | pas de réponse ; réessayer plus tard | `(nil, ErrWouldBlock)`  | le bloquant attend ; le stepping renvoie la suspension |
 | autre           | échec d'infrastructure        | `(nil, error)`          | le bloquant panique ; le stepping renvoie l'erreur   |
+
+Le tableau décrit le contrat de réponse de Dispatcher. Le contrôle `iox` ne mesure pas les octets transférés et ne prouve pas la libération des ressources ; le dispatcher conserve le travail partiel lorsqu'il renvoie WouldBlock.
+
+La répartition suit `iox.Classify`, y compris pour les erreurs enveloppées. Une erreur correspondant à la fois à `ErrWouldBlock` et à `ErrMore` est classée WouldBlock : la suspension est conservée pour une nouvelle tentative ultérieure.
 
 ## Utilisation
 
@@ -75,14 +79,11 @@ La loi de résultat du pas manuel est explicite : si `d.Dispatch(susp.Op())` ren
 
 ```go
 result, susp := takt.Step[int](exprComputation)
+var err error
 if susp != nil {
-	var err error
 	result, susp, err = takt.Advance(d, susp)
-	if iox.IsWouldBlock(err) {
-		return susp // céder à la boucle d'événements ; replanifier quand prêt
-	}
 }
-// result contient la valeur finale
+// result n'est final que si susp == nil. Sinon, conservez susp et traitez err avant la prochaine étape.
 ```
 
 ### Gestion des erreurs
@@ -91,17 +92,14 @@ Composez les opérations du dispatcher avec des effets d'erreur. `Throw` court-c
 
 ```go
 either := takt.ExecError[string](d, computation)
-// Right en cas de succès, Left en cas de Throw
+// Right on success, Left on Throw
 
-// Pas à pas avec erreurs
 either, susp := takt.StepError[string, int](exprComputation)
+var err error
 if susp != nil {
-	var err error
 	either, susp, err = takt.AdvanceError[string](d, susp)
-	if iox.IsWouldBlock(err) {
-		return susp // céder à la boucle d'événements ; replanifier quand prêt
-	}
 }
+// either n'est final que si susp == nil. Conservez la suspension en cas de WouldBlock ou d'échec d'infrastructure.
 ```
 
 ### Boucle d'événements

@@ -39,10 +39,14 @@ Each dispatched operation yields an `iox` outcome. `Dispatcher.Dispatch` reports
 
 | Outcome | Meaning | Dispatcher return | Blocking / stepping behavior |
 |---------|---------|-------------------|------------------------------|
-| `nil` | completed | `(value, nil)` | resume |
-| `ErrMore` | progress with a live frontier | `(value, ErrMore)` | resume; stepping returns `ErrMore` |
-| `ErrWouldBlock` | no progress | `(nil, ErrWouldBlock)` | blocking waits; stepping returns the suspension |
+| `nil` | valid reply | `(value, nil)` | resume |
+| `ErrMore` | valid reply; interaction stays live | `(value, ErrMore)` | resume; stepping returns `ErrMore` |
+| `ErrWouldBlock` | no reply now; retry later | `(nil, ErrWouldBlock)` | blocking waits; stepping returns the suspension |
 | other | infrastructure failure | `(nil, error)` | blocking panics; stepping returns the error |
+
+The table describes the Dispatcher reply contract. `iox` control alone does not measure transferred bytes or establish resource release; partial work must remain with the dispatcher when it returns WouldBlock.
+
+Dispatch follows `iox.Classify`, including wrapped errors. An error matching both `ErrWouldBlock` and `ErrMore` is WouldBlock: retain the suspension and retry later.
 
 ## Usage
 
@@ -75,14 +79,11 @@ The manual stepping outcome law is explicit: if `d.Dispatch(susp.Op())` returns 
 
 ```go
 result, susp := takt.Step[int](exprComputation)
+var err error
 if susp != nil {
-	var err error
 	result, susp, err = takt.Advance(d, susp)
-	if iox.IsWouldBlock(err) {
-		return susp // yield to the event loop and reschedule when ready
-	}
 }
-// result holds the final value
+// result is final only when susp == nil. Otherwise retain susp and handle err before the next advance.
 ```
 
 ### Error Handling
@@ -93,15 +94,12 @@ Compose dispatcher operations with error effects. `Throw` short-circuits the com
 either := takt.ExecError[string](d, computation)
 // Right on success, Left on Throw
 
-// Stepping with errors
 either, susp := takt.StepError[string, int](exprComputation)
+var err error
 if susp != nil {
-	var err error
 	either, susp, err = takt.AdvanceError[string](d, susp)
-	if iox.IsWouldBlock(err) {
-		return susp // yield to the event loop and reschedule when ready
-	}
 }
+// either is final only when susp == nil. Retain the suspension on WouldBlock or infrastructure failure.
 ```
 
 ### Event Loop

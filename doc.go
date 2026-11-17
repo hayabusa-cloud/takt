@@ -35,10 +35,17 @@
 //
 // # iox Classification
 //
-//   - nil: completed
-//   - [code.hybscloud.com/iox.ErrMore]: progress with a live frontier
-//   - [code.hybscloud.com/iox.ErrWouldBlock]: no progress, retry later
-//   - failure: infrastructure error
+//   - nil: success at the observed boundary
+//   - [code.hybscloud.com/iox.ErrMore]: the interaction remains live
+//   - [code.hybscloud.com/iox.ErrWouldBlock]: further progress requires readiness or retry
+//   - failure: an ordinary error at the observed boundary
+//
+// Progress quantities and resource custody are separate from these controls.
+// Dispatch uses [code.hybscloud.com/iox.Classify]: when an error matches both
+// semantic sentinels, WouldBlock takes precedence and the continuation stays owned.
+// [Dispatcher] requires a valid reply on nil or ErrMore and retains partial
+// work on WouldBlock. Whole-program completion is indicated by the absence of
+// a successor suspension, not merely by a successful dispatch.
 //
 // Event-loop backends report infrastructure poll failures directly from
 // [Backend.Poll]. [Loop.Poll] and [Loop.Run] keep poll failures separate from
@@ -99,8 +106,8 @@
 // resuming that operation produces another suspension, the caller receives it
 // back and decides how to continue.
 //
-// [AdvanceSuspension] resumes on [code.hybscloud.com/iox.ErrMore] because
-// `iox` classifies ErrMore as progress with a live frontier. It returns the
+// [AdvanceSuspension] resumes on [code.hybscloud.com/iox.ErrMore] using the
+// dispatcher's valid reply while the interaction remains live. It returns the
 // original suspension unchanged on [code.hybscloud.com/iox.ErrWouldBlock] or
 // ordinary failure.
 //
@@ -116,8 +123,7 @@
 //
 // # Execution styles
 //
-// For deterministic dispatchers, [Exec], a loop built from [Step]/[Advance],
-// and [Loop.Run] produce the same externally visible results. Choose the style
-// that fits your integration: blocking execution, manual stepping, or a
-// backend-driven event loop.
+// Blocking execution, manual stepping and backend-driven execution have different
+// scheduling contracts. Equivalence requires matching operation, ownership,
+// scheduling and failure premises; determinism alone does not supply them.
 package takt
