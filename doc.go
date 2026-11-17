@@ -18,7 +18,7 @@
 // # Primary Operational Surface
 //
 //   - Stepping: [AdvanceSuspension] and [Advance] dispatch one observed suspension at a time
-//   - Event loop: [Loop] drives computations through a [Backend] (submit/poll)
+//   - Event loop: [Loop] admits bounded computations and drives a [Backend] (submit/poll)
 //   - Stream loop: [SubscriptionLoop] drives route-indexed stream observations through a [SubscriptionBackend]
 //
 // # Convenience Surface
@@ -51,19 +51,21 @@
 // [Backend.Poll]. [Loop.Poll] and [Loop.Run] keep poll failures separate from
 // completion classification: poll-level [code.hybscloud.com/iox.ErrWouldBlock]
 // is treated as idle, while completion-level
-// [code.hybscloud.com/iox.ErrWouldBlock] triggers a fresh submission for the
-// same suspension without marking that tick as progress. [Backend.Submit] must
+// [code.hybscloud.com/iox.ErrWouldBlock] defers the same suspension to a later
+// offer round without marking that tick as progress. This requires retirement
+// with no reply or hidden partial progress. [Backend.Submit] must
 // return a token that is unique among all submissions still live in the loop;
 // if a backend reuses a live token, [Loop.Poll] and [Loop.Run] surface
-// [ErrLiveTokenReuse] after draining every
-// pending suspension exactly once. [Loop.Poll] and [Loop.Run] return
-// [ErrUnsupportedMultishot] for completion-level [code.hybscloud.com/iox.ErrMore]:
-// a completion was received from the backend, but its [Completion.Value] is
-// not resumed into the suspended operation because the submitted backend
-// operation remains active and may produce later same-token completions.
-// Generic [Loop] has no subscription or cancel carrier for that still-live
-// operation, so multishot stream ownership belongs in a concrete layer above
-// takt.
+// [ErrLiveTokenReuse]. Completion-level [code.hybscloud.com/iox.ErrMore] records
+// [ErrUnsupportedMultishot]: its submission remains live and cannot resume the
+// same affine continuation repeatedly. Use [SubscriptionLoop] with a binding
+// that owns the native stream lifetime.
+//
+// The full fetched batch is accounted before replies resume. A batch fault
+// may still permit earlier stable replies to resume; their successors and the
+// remaining suspensions are discarded under the binding's abort contract.
+// [Loop.Poll] returns completed prefix results first and reports the stored
+// error on a later call. [Loop.Run] returns collected results with that error.
 //
 // [SubscriptionLoop] is the abstract stream counterpart to [Loop]. It uses a
 // [RouteID] made from a [Token] and generation, returns opaque [Subscription]
@@ -75,13 +77,14 @@
 // are independent of More, so an empty live boundary and a payload error on a
 // still-live route are both representable without collapsing them into
 // terminal success or failure. Poll-level [code.hybscloud.com/iox.ErrWouldBlock]
-// remains idle/no mutation. A [SubscriptionBackend] must not return ready stream
+// leaves route state unchanged. A [SubscriptionBackend] must not return ready stream
 // completions together with a non-nil poll-level error; payload errors belong in
 // [StreamCompletion.EventErr]. Stale completions for already retired routes are
 // ignored.
 //
 // [CompletionMemory] supplies the [Completion] slice that a [Loop] passes to
-// [Backend.Poll]. Use [NewLoop] with functional options: [WithMemory] installs
+// [Backend.Poll]. [NewLoop] requires positive computation capacity, separately
+// from completion-batch size. With functional options, [WithMemory] installs
 // a custom provider, [WithMaxCompletions] caps the visible slice length,
 // [HeapMemory] is the default, and [BoundedMemory] provides a single bounded
 // pool of default-sized 128 KiB slabs. [Loop.Drain] releases that slice exactly
@@ -116,10 +119,18 @@
 // [code.hybscloud.com/kont.Eff] into Expr form first). This gives the backend
 // one pending suspension per token while that submission remains live.
 //
-// [Loop] instances are single-owner runners: callers must serialize SubmitExpr,
-// Submit, Poll, Run, Drain, Pending, and Failed calls on the same loop. The
-// internal pending map uses sharding for token lookup, not as a public
-// concurrent-use guarantee.
+// [Loop] instances are single-owner runners: callers must serialize all access,
+// including SubmitSuspension and the Ready/Pending/Failed observations. A Loop
+// must not be copied after construction or reentered by a state-changing callback. The
+// provisioned token index uses fixed bucket chains. Admission reserves before
+// program evaluation; backend refusal retains the reached suspension. Poll
+// accounts the full batch before resuming. Successors enter later offer rounds.
+// [Loop.Ready] distinguishes fresh work from deferred retries. Native custody
+// remains with the backend binding even after local disposal.
+//
+// [Loop.Poll] results are borrowed until the next Poll, Run or Drain. Copy
+// values that must survive that boundary. The loop clears expired references;
+// this does not dispose native resources. [Loop.Run]'s collector is caller-owned.
 //
 // # Execution styles
 //

@@ -197,7 +197,7 @@ func TestBoundedMemoryReleaseClearsOnReuse(t *testing.T) {
 
 func TestNewLoopUsesHeapMemoryDefault(t *testing.T) {
 	b := &observingBackend{}
-	l := takt.NewLoop[*observingBackend, int](b)
+	l := takt.NewLoop[*observingBackend, int](b, 1024)
 	if _, err := l.Poll(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -209,7 +209,7 @@ func TestNewLoopUsesHeapMemoryDefault(t *testing.T) {
 
 func TestNewLoopWithMaxCompletionsRoutesSize(t *testing.T) {
 	b := &observingBackend{}
-	l := takt.NewLoop[*observingBackend, int](b, takt.WithMaxCompletions(8))
+	l := takt.NewLoop[*observingBackend, int](b, 1024, takt.WithMaxCompletions(8))
 	if _, err := l.Poll(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestNewLoopWithMaxCompletionsRoutesSize(t *testing.T) {
 func TestNewLoopWithMemoryRoutesProvider(t *testing.T) {
 	mem := &recordingMemory{}
 	b := &observingBackend{}
-	l := takt.NewLoop[*observingBackend, int](b, takt.WithMemory(mem),
+	l := takt.NewLoop[*observingBackend, int](b, 1024, takt.WithMemory(mem),
 		takt.WithMaxCompletions(8))
 	if mem.calls != 1 {
 		t.Fatalf("memory calls=%d want 1", mem.calls)
@@ -247,7 +247,7 @@ func TestNewLoopWithMemoryRoutesProvider(t *testing.T) {
 func TestNewLoopWithBoundedMemoryEndToEnd(t *testing.T) {
 	b := &observingBackend{}
 	mem := &takt.BoundedMemory{}
-	l := takt.NewLoop[*observingBackend, int](b, takt.WithMemory(mem),
+	l := takt.NewLoop[*observingBackend, int](b, 1024, takt.WithMemory(mem),
 		takt.WithMaxCompletions(8))
 	if _, err := l.Poll(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -321,7 +321,7 @@ func TestNewLoopRejectsShortCompletionBuffer(t *testing.T) {
 			t.Fatalf("panic = %v, want fixed message", r)
 		}
 	}()
-	_ = takt.NewLoop[*observingBackend, int](&observingBackend{},
+	_ = takt.NewLoop[*observingBackend, int](&observingBackend{}, 1024,
 		takt.WithMemory(shortMemory{}), takt.WithMaxCompletions(4))
 }
 
@@ -333,13 +333,13 @@ func TestNewLoopRejectsEmptyDefaultCompletionBuffer(t *testing.T) {
 			t.Fatalf("panic = %v, want fixed message", r)
 		}
 	}()
-	_ = takt.NewLoop[*observingBackend, int](&observingBackend{},
+	_ = takt.NewLoop[*observingBackend, int](&observingBackend{}, 1024,
 		takt.WithMemory(emptyDefaultMemory{}))
 }
 
 func TestNewLoopCapsVisibleLengthOnOversizedProvider(t *testing.T) {
 	b := &observingBackend{}
-	l := takt.NewLoop[*observingBackend, int](b,
+	l := takt.NewLoop[*observingBackend, int](b, 1024,
 		takt.WithMemory(oversizedMemory{}), takt.WithMaxCompletions(8))
 	if _, err := l.Poll(); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -352,7 +352,7 @@ func TestNewLoopCapsVisibleLengthOnOversizedProvider(t *testing.T) {
 func TestDrainIsIdempotentOnMemory(t *testing.T) {
 	mem := &recordingMemory{}
 	b := &observingBackend{}
-	l := takt.NewLoop[*observingBackend, int](b, takt.WithMemory(mem),
+	l := takt.NewLoop[*observingBackend, int](b, 1024, takt.WithMemory(mem),
 		takt.WithMaxCompletions(4))
 	l.Drain()
 	first := mem.releaseCalls

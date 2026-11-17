@@ -9,7 +9,7 @@ package takt
 // Available options:
 //   - [WithMemory] supplies a custom [CompletionMemory] provider (defaults to a fresh
 //     [HeapMemory]).
-//   - [WithMaxCompletions] caps the per-poll completion slab length
+//   - [WithMaxCompletions] caps each Poll phase: offers, observations and resumptions
 //     (defaults to the CompletionMemory provider's own choice; see
 //     [DefaultCompletionBufSize] for the [HeapMemory] and [BoundedMemory]
 //     default size).
@@ -36,8 +36,9 @@ func WithMemory(m CompletionMemory) Option {
 	return optionFunc(func(c *loopConfig) { c.memory = m })
 }
 
-// WithMaxCompletions caps the per-poll completion slab length. If omitted,
-// the CompletionMemory provider chooses the size (typically
+// WithMaxCompletions caps the per-poll completion slab length and the number
+// of offers, observations and resumptions in their respective phases. If omitted,
+// the CompletionMemory provider chooses this bound (typically
 // [DefaultCompletionBufSize]). Panics if n <= 0.
 func WithMaxCompletions(n int) Option {
 	if n <= 0 {

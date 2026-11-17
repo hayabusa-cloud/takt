@@ -5,7 +5,6 @@
 package takt_test
 
 import (
-	"sync/atomic"
 	"testing"
 
 	"code.hybscloud.com/kont"
@@ -45,7 +44,7 @@ func benchCont(val int) kont.Expr[int] {
 
 func BenchmarkLoopSubmitPoll(b *testing.B) {
 	backend := &benchBackend{value: kont.Erased(42)}
-	loop := takt.NewLoop[*benchBackend, int](backend, takt.WithMaxCompletions(1))
+	loop := takt.NewLoop[*benchBackend, int](backend, 1024, takt.WithMaxCompletions(1))
 	expr := benchCont(42)
 
 	b.ResetTimer()
@@ -63,7 +62,7 @@ func BenchmarkLoopSubmitPoll(b *testing.B) {
 
 func BenchmarkLoopSubmitPure(b *testing.B) {
 	backend := &benchBackend{}
-	loop := takt.NewLoop[*benchBackend, int](backend, takt.WithMaxCompletions(1))
+	loop := takt.NewLoop[*benchBackend, int](backend, 1024, takt.WithMaxCompletions(1))
 	expr := kont.ExprReturn(42)
 
 	b.ResetTimer()
@@ -75,32 +74,18 @@ func BenchmarkLoopSubmitPure(b *testing.B) {
 	}
 }
 
-type dummyRaceBackend struct {
-	nextTok uint64
-}
-
-type raceOp struct{}
-
-func (raceOp) OpResult() *int { return nil }
-
-func (b *dummyRaceBackend) Submit(op kont.Operation) (takt.Token, error) {
-	tok := atomic.AddUint64(&b.nextTok, 1)
-	return takt.Token(tok), nil
-}
-
-func (b *dummyRaceBackend) Poll(completions []takt.Completion) (int, error) {
-	return 0, nil
-}
-
-func BenchmarkLoopConcurrentSubmit(b *testing.B) {
-	backend := &dummyRaceBackend{}
-	l := takt.NewLoop[*dummyRaceBackend, *int](backend, takt.WithMaxCompletions(1024))
-
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			l.SubmitExpr(kont.ExprPerform(raceOp{}))
+func BenchmarkLoopBoundedRound(b *testing.B) {
+	l := takt.NewLoop[*benchBackend, int](&benchBackend{value: 42}, 1, takt.WithMaxCompletions(1))
+	defer l.Drain()
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, _, err := l.SubmitExpr(kont.ExprPerform(echoOp{})); err != nil {
+			b.Fatal(err)
 		}
-	})
+		if _, err := l.Poll(); err != nil {
+			b.Fatal(err)
+		}
+	}
 }
 
 func BenchmarkLoopRunAccumulatedResults(b *testing.B) {
@@ -111,7 +96,7 @@ func BenchmarkLoopRunAccumulatedResults(b *testing.B) {
 	for b.Loop() {
 		b.StopTimer()
 		backend := &immediateBackend{dispatch: d.Dispatch}
-		loop := takt.NewLoop[*immediateBackend, int](backend, takt.WithMaxCompletions(pending))
+		loop := takt.NewLoop[*immediateBackend, int](backend, 1024, takt.WithMaxCompletions(pending))
 		for j := 0; j < pending; j++ {
 			if _, done, err := loop.SubmitExpr(kont.ExprPerform(echoOp{})); err != nil || done {
 				b.Fatalf("submit[%d]: done=%v err=%v", j, done, err)
@@ -135,7 +120,7 @@ func BenchmarkLoopRunChainedSingleCompletion(b *testing.B) {
 	for b.Loop() {
 		b.StopTimer()
 		backend := &immediateBackend{dispatch: d.Dispatch}
-		loop := takt.NewLoop[*immediateBackend, int](backend, takt.WithMaxCompletions(1))
+		loop := takt.NewLoop[*immediateBackend, int](backend, 1024, takt.WithMaxCompletions(1))
 		if _, done, err := loop.SubmitExpr(echoChain(64)); err != nil || done {
 			b.Fatalf("submit: done=%v err=%v", done, err)
 		}

@@ -15,7 +15,7 @@ In a proactor model, I/O operations are submitted to the kernel and their comple
 
 `takt` provides this execution model as an abstract layer over the [kont](https://code.hybscloud.com/kont) effect system. A `Dispatcher` evaluates one algebraic effect at a time, classifying the result according to the [iox](https://code.hybscloud.com/iox) outcome algebra. A `Backend` submits operations to an asynchronous engine, for example `io_uring`, and polls for completions. The `Loop` ties them together: it submits computations, polls the backend, correlates completions by token, and resumes suspended continuations.
 
-Two equivalent APIs are available: `kont.Eff` (closure-based, straightforward to compose) and `kont.Expr` (frame-based, with lower allocation overhead on hot paths).
+Programs have two representations: `kont.Eff` uses closures for composition; `kont.Expr` exposes frames for stepping. `Reify` and `Reflect` connect them. Allocation and execution costs depend on the program and realization; neither representation alone guarantees a cheaper hot path.
 
 The event-loop path stores one pending suspension per live token. Each token tracks a suspension produced by `kont.StepExpr` (or by reifying `kont.Eff` first), so `Backend.Submit` must not reuse a token while the older submission carrying it remains live in the loop.
 
@@ -106,26 +106,39 @@ if susp != nil {
 
 A `Loop` drives computations through a `Backend`. It submits operations, polls for completions, correlates them by `Token`, and resumes suspended continuations. `NewLoop` accepts functional `Option`s. `WithMaxCompletions(n)` panics when `n <= 0` with `takt: WithMaxCompletions requires n > 0`; `WithMemory(nil)` panics with `takt: WithMemory requires a non-nil CompletionMemory`.
 
+`NewLoop` requires positive capacity. `Loop.Submit` and `SubmitExpr` reserve before evaluating; their success admits work locally, and `Poll` offers it to the backend. A pure program can finish immediately: check the returned `done` flag and value. Local capacity refusal executes no prefix; `SubmitSuspension` transfers ownership only on success. `Ready` distinguishes fresh work from deferred retries. `WithMaxCompletions` bounds offers, observations, and resumptions in separate phases.
+
 `Backend.Poll([]Completion) (int, error)` reports both the number of ready completions and any infrastructure poll failure; a backend must not return ready completions together with a non-nil poll-level error. `Loop` treats `iox.ErrWouldBlock` returned by `Poll` as an idle tick rather than a terminal error.
 
-`Loop` is a single-owner runner. Serialize calls that share the same `Loop`, including `SubmitExpr`, `Submit`, `Poll`, `Run`, `Drain`, `Pending`, and `Failed`.
+On a successful or ordinary-failure completion, `Loop` resumes with `Completion.ResumeValue()`, including any operation error in that reply. Ordinary backends populate `Value`; fixed non-pointer payloads can use `NewInlineCompletion` and a `CompletionDecoder` to delay boxing until resumption. Reading `Value` directly does not decode inline payloads; decoding may allocate.
+
+`Loop` requires serialized access, including observation methods such as `Ready`, `Pending`, and `Failed`. Callbacks must not reenter state-changing methods. Do not copy a constructed loop.
 
 `Backend.Submit` must return a token that is unique among all submissions still live in the loop. Tokens are correlation keys, not sequence numbers; a concrete backend may use a kernel `user_data` value directly. If a backend reuses a live token, the loop records `ErrLiveTokenReuse`, drains every pending suspension exactly once, and every subsequent `SubmitExpr` / `Submit` / `Poll` / `Run` call returns that fatal error.
 
-When a completion carries `iox.ErrWouldBlock`, the loop resubmits the same operation. If a completion carries `iox.ErrMore` (multishot), the loop records `ErrUnsupportedMultishot`, drains every pending suspension exactly once, and every subsequent `SubmitExpr` / `Submit` / `Poll` / `Run` call returns that fatal error. `ErrMore` means the submitted backend operation remains active after the CQE, while generic `Loop` has no subscription or cancel carrier for later same-token completions.
+A completion carrying `iox.ErrWouldBlock` defers the same suspension to a later round, provided the old submission retired with no reply or hidden partial progress. Completion-level `iox.ErrMore` records `ErrUnsupportedMultishot`: that backend interaction remains live and needs a subscription owner. The loop accounts the whole batch before resuming. Earlier stable replies may still complete; successors and remaining suspensions are discarded under the binding's abort contract. `Poll` returns completed prefix results first and reports the stored error on a later call; `Run` returns collected results together with the error.
+
+`Loop.Poll` results are borrowed until the next `Poll`, `Run`, or `Drain`. Copy values before retaining them. Expiration clears the runner's references. Clearing is not resource disposal: native requests, descriptors, and buffer loans retain their own owners. Call `Loop.Drain` even after completion or failure to return its completion slab.
 
 `Loop.Failed()` reports the recorded fatal error (or `nil`). `Loop.Drain()` forces the loop into a disposed state, discards every pending suspension exactly once, and records `ErrDisposed` only if no fatal was previously set; it is idempotent and preserves the original fatal error when one already exists.
 
 ```go
-loop := takt.NewLoop[*myBackend, int](backend, takt.WithMaxCompletions(64))
+loop := takt.NewLoop[*myBackend, int](backend, 128, takt.WithMaxCompletions(64))
+defer loop.Drain()
 
-// Submit computations
-loop.SubmitExpr(exprComputation1)
-loop.SubmitExpr(exprComputation2)
-loop.Submit(contComputation) // kont.Eff
-
-// Drive all to completion
-results, err := loop.Run()
+result, done, err := loop.SubmitExpr(exprComputation)
+if err != nil {
+	return err
+}
+if done {
+	fmt.Println(result)
+} else {
+	results, err := loop.Run()
+	fmt.Println(results)
+	if err != nil {
+		return err
+	}
+}
 ```
 
 ### Stream / Subscription Runner
@@ -165,28 +178,37 @@ _ = events
 _ = err
 ```
 
+### Completion Memory
+
 `NewLoop` uses [`HeapMemory`](completion_memory.go) as the default completion-buffer provider. Pass [`BoundedMemory`](completion_memory.go) via [`WithMemory`](option.go) when completion buffers should come from a bounded steady-state pool of default-sized 128 KiB slabs; or supply a custom `CompletionMemory` implementation to control allocation strategy without widening the `Backend` or `Completion` contracts. Custom providers must return exclusive non-overlapping live slabs and may treat `Release` as ownership transfer back to the provider:
 
 ```go
 // Default: HeapMemory + default-sized completion slab.
-loop := takt.NewLoop[*myBackend, int](backend)
+defaultLoop := takt.NewLoop[*myBackend, int](backend, 128)
+defer defaultLoop.Drain()
 
 // Cap the per-poll completion slab length (the provider still chooses the slab shape; Loop trims the visible length back to this cap).
-loop = takt.NewLoop[*myBackend, int](backend, takt.WithMaxCompletions(64))
+cappedLoop := takt.NewLoop[*myBackend, int](backend, 128, takt.WithMaxCompletions(64))
+defer cappedLoop.Drain()
 
-// Share one HeapMemory's sync.Pool across several Loops by passing the same address to WithMemory; copying a HeapMemory value would not share recycled slabs.
+// Share the same HeapMemory pointer between loops. Do not copy HeapMemory or BoundedMemory after first use.
 heap := &takt.HeapMemory{}
-loopA := takt.NewLoop[*myBackend, int](backend, takt.WithMemory(heap))
-loopB := takt.NewLoop[*myBackend, int](backend, takt.WithMemory(heap))
+loopA := takt.NewLoop[*myBackend, int](backendA, 128, takt.WithMemory(heap))
+defer loopA.Drain()
+loopB := takt.NewLoop[*myBackend, int](backendB, 128, takt.WithMemory(heap))
+defer loopB.Drain()
 
 // BoundedMemory: one bounded pool of default-sized 128 KiB slabs. WithPoolCapacity tunes that pool's capacity (rounded up to the next power of two by iobuf).
 bounded := takt.NewBoundedMemory(takt.WithPoolCapacity(4))
-loop = takt.NewLoop[*myBackend, int](
-	backend,
+boundedLoop := takt.NewLoop[*myBackend, int](
+	backend, 128,
 	takt.WithMemory(bounded),
 	takt.WithMaxCompletions(64),
 )
+defer boundedLoop.Drain()
 ```
+
+`BoundedMemory` bounds retained pooled storage, not total live memory. An exhausted pool allocates an extra default-sized slab; oversized requests allocate exact-size slabs. `Release` does not retain those overflow slabs. Call `Drain` on every loop to return its storage, even after completion or failure; native resource settlement remains the binding's responsibility.
 
 ## API Overview
 
@@ -220,13 +242,18 @@ loop = takt.NewLoop[*myBackend, int](
 - `CompletionBufOption`: functional options for `CompletionMemory.CompletionBuf` (`WithSize`)
 - `BoundedMemoryOption`: functional options for `NewBoundedMemory` (`WithPoolCapacity`)
 - `Token`: submission-completion correlation (`uint64`)
-- `Completion`: `{Token, Value kont.Resumed, Err error}`
-- `NewLoop[B, R](b B, opts ...Option) *Loop[B, R]`: create an event loop (default `HeapMemory`, default-sized slab)
-- `(*Loop[B, R]).SubmitExpr(m kont.Expr[R]) (R, bool, error)`: step and submit Expr
-- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)`: step and submit Cont
+- `Completion`: token, outcome and direct or inline reply payload
+- `Completion.ResumeValue() kont.Resumed`: obtain the reply from either representation
+- `CompletionDecoder`: decode two non-pointer words at resumption
+- `NewInlineCompletion(token Token, word0, word1 uint64, decoder CompletionDecoder, err error) Completion`: construct an inline completion
+- `NewLoop[B, R](b B, capacity int, opts ...Option) *Loop[B, R]`: create an event loop (default `HeapMemory`, default-sized slab)
+- `(*Loop[B, R]).SubmitExpr(m kont.Expr[R]) (R, bool, error)`: reserved evaluation; immediate result or queued suspension
+- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)`: reserved reification; immediate result or queued suspension
 - `(*Loop[B, R]).Poll() ([]R, error)`: poll and dispatch completions
 - `(*Loop[B, R]).Run() ([]R, error)`: drive all to completion
-- `(*Loop[B, R]).Pending() int`: count pending operations
+- `(*Loop[B, R]).SubmitSuspension(s *kont.Suspension[R]) error`
+- `(*Loop[B, R]).Ready() bool`
+- `(*Loop[B, R]).Pending() int`: local computation lineages, including deferred retries
 - `(*Loop[B, R]).Failed() error`: terminal fatal error, or nil
 - `(*Loop[B, R]).Drain() int`: discard pending suspensions and dispose the loop
 - `ErrLiveTokenReuse`: backend reused a token that was still live in the loop
@@ -267,30 +294,8 @@ loop = takt.NewLoop[*myBackend, int](
 
 ## Practical Recipes
 
-A complete event-loop integration combines a `Dispatcher` (the synchronous semantics) with a `Backend` (the proactor) under one `Loop`:
+Use a `Backend` with `Loop`, or a `Dispatcher` with `Exec` and `Advance`. They are separate execution paths; a Loop does not invoke a Dispatcher automatically. `ExecError` and `AdvanceError` interpret application error effects explicitly. A raw Loop needs a backend/interpreter that handles every admitted operation, including any error effects. [Runnable examples](example_test.go) demonstrate successor handling, immediate results, and deferred backend admission.
 
-```go
-// 1. Define the dispatcher: maps an effect operation to an iox outcome.
-type myDispatcher struct{ /* ... */ }
-
-func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-	// Return (value, nil), (value, iox.ErrMore), or (nil, iox.ErrWouldBlock).
-}
-
-// 2. Define the backend: submits ops to the OS proactor and polls completions.
-type myBackend struct{ /* ... */ }
-func (b *myBackend) Submit(op kont.Operation) (takt.Token, error) { /* ... */ }
-func (b *myBackend) Poll(out []takt.Completion) (int, error)      { /* ... */ }
-
-// 3. Drive: submit one or more computations, then Run to completion.
-loop := takt.NewLoop[*myBackend, int](backend, takt.WithMaxCompletions(64))
-loop.SubmitExpr(prog1)
-loop.SubmitExpr(prog2)
-results, err := loop.Run()
-_ = results; _ = err
-```
-
-For error-aware composition use `ExecError` / `StepError` / `AdvanceError` in place of their non-error counterparts; `Throw` short-circuits the in-flight computation while leaving sibling computations on the same loop unaffected. The fused dispatcher+backend pattern shown here is the one used by `sess` to attach a session endpoint to a real I/O runtime.
 
 ## References
 

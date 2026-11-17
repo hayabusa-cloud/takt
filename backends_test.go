@@ -267,10 +267,11 @@ func (b *multishotBackend) Poll(completions []takt.Completion) (int, error) {
 // duplicateTokenBackend returns a caller-provided token schedule so tests can
 // verify that Loop rejects reuse of a still-live token.
 type duplicateTokenBackend struct {
-	tokens []takt.Token
-	next   int
-	value  kont.Resumed
-	ready  []takt.Completion
+	tokens    []takt.Token
+	pollLimit int
+	next      int
+	value     kont.Resumed
+	ready     []takt.Completion
 }
 
 func (b *duplicateTokenBackend) Submit(op kont.Operation) (takt.Token, error) {
@@ -285,6 +286,9 @@ func (b *duplicateTokenBackend) Submit(op kont.Operation) (takt.Token, error) {
 }
 
 func (b *duplicateTokenBackend) Poll(completions []takt.Completion) (int, error) {
+	if b.pollLimit > 0 {
+		completions = completions[:min(len(completions), b.pollLimit)]
+	}
 	n := copy(completions, b.ready)
 	b.ready = b.ready[n:]
 	return n, nil

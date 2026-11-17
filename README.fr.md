@@ -15,7 +15,7 @@ Dans un modèle proactor, les opérations d'E/S sont soumises au noyau et leurs 
 
 `takt` fournit ce modèle d'exécution comme une couche abstraite au-dessus du système d'effets [kont](https://code.hybscloud.com/kont). Un `Dispatcher` évalue un effet algébrique à la fois et classe le résultat selon l'algèbre de résultats [iox](https://code.hybscloud.com/iox). Un `Backend` soumet les opérations à un moteur asynchrone, par exemple `io_uring`, et sonde les complétions. `Loop` les relie : il soumet les calculs, sonde le backend, corrèle les complétions par jeton et reprend les continuations suspendues.
 
-Deux API équivalentes sont disponibles : `kont.Eff` (à base de fermetures et simple à composer) et `kont.Expr` (à base de frames, avec moins d'allocations sur les chemins critiques).
+Les programmes ont deux représentations : `kont.Eff` utilise des fermetures pour la composition, et `kont.Expr` expose des frames pour avancer par étapes. `Reify` et `Reflect` les relient. Les coûts d'allocation et d'exécution dépendent du programme et de sa réalisation ; aucune représentation ne garantit à elle seule un chemin critique moins coûteux.
 
 Le chemin de boucle d'événements garde une seule suspension pendante par jeton vivant. Chaque jeton suit une suspension produite par `kont.StepExpr` (ou après réification de `kont.Eff`), donc `Backend.Submit` ne doit pas réutiliser un jeton tant que la soumission plus ancienne qui le porte reste vivante dans la boucle.
 
@@ -106,26 +106,41 @@ if susp != nil {
 
 Un `Loop` pilote les calculs au travers d'un `Backend`. Il soumet les opérations, sonde les complétions, les corrèle par `Token` et reprend les continuations suspendues. `NewLoop` accepte des `Option` fonctionnelles. `WithMaxCompletions(n)` panique si `n <= 0` avec `takt: WithMaxCompletions requires n > 0` ; `WithMemory(nil)` panique avec `takt: WithMemory requires a non-nil CompletionMemory`.
 
+`NewLoop` exige une capacité positive. `Submit` et `SubmitExpr` admettent le travail localement ; `Poll` le soumet au backend. Un refus de capacité n'exécute aucun préfixe du programme. `SubmitSuspension` transfère la suspension uniquement en cas de succès. `Ready` distingue le travail nouveau des tentatives différées. Chaque cycle traite le lot avant de reprendre les continuations ; les successeurs attendent un cycle ultérieur. La vidange locale ne libère pas les ressources natives.
+
+Un programme pur peut terminer immédiatement : vérifiez `done` et la valeur renvoyée par `Submit` ou `SubmitExpr`. `WithMaxCompletions` borne séparément les propositions, les observations et les reprises.
+
 `Backend.Poll([]Completion) (int, error)` rapporte à la fois le nombre de complétions prêtes et tout échec d'infrastructure de sondage ; un backend ne doit pas renvoyer des complétions prêtes avec une erreur de sondage différente de nil. Le `Loop` traite un `iox.ErrWouldBlock` renvoyé par `Poll` comme un tour à vide plutôt que comme une erreur terminale.
 
-`Loop` est un exécuteur à propriétaire unique. Sérialisez les appels qui partagent la même `Loop`, notamment `SubmitExpr`, `Submit`, `Poll`, `Run`, `Drain`, `Pending` et `Failed`.
+Lorsqu'une complétion indique un succès ou un échec ordinaire, `Loop` reprend avec `Completion.ResumeValue()`, y compris les erreurs d'opération encodées dans cette réponse. Les backends habituels remplissent `Value` ; les charges de taille fixe sans pointeurs peuvent utiliser `NewInlineCompletion` et un `CompletionDecoder` pour reporter l'encapsulation dans une interface jusqu'à la reprise. Lire directement `Value` ne décode pas une charge inline ; le décodage peut allouer de la mémoire.
+
+Tous les accès à `Loop` doivent être sérialisés, y compris `Ready`, `Pending` et `Failed`. Les callbacks ne doivent pas réentrer dans les méthodes qui modifient l'état. Ne copiez pas une boucle après sa construction.
 
 `Backend.Submit` doit renvoyer un jeton unique parmi toutes les soumissions encore vivantes dans la boucle. Les jetons sont des clés de corrélation, pas des numéros de séquence ; un backend concret peut utiliser directement une valeur kernel `user_data`. Si un backend réutilise un jeton vivant, la boucle enregistre `ErrLiveTokenReuse`, écarte chaque suspension pendante exactement une fois, puis tout appel ultérieur à `SubmitExpr` / `Submit` / `Poll` / `Run` renvoie cette erreur fatale.
 
-Lorsqu'une complétion porte `iox.ErrWouldBlock`, la boucle resoumet la même opération. Si une complétion porte `iox.ErrMore` (multishot), la boucle enregistre `ErrUnsupportedMultishot`, écarte chaque suspension pendante exactement une fois, et tout appel ultérieur à `SubmitExpr` / `Submit` / `Poll` / `Run` renvoie cette erreur fatale. `ErrMore` signifie que l'opération backend soumise reste active après la CQE, tandis que le `Loop` générique n'a pas de porteur d'abonnement ou d'annulation pour les complétions ultérieures du même jeton.
+Une complétion portant `iox.ErrWouldBlock` reporte la même suspension à un tour ultérieur, à condition que l'ancienne soumission soit terminée sans réponse ni progrès partiel caché. Une complétion portant `iox.ErrMore` enregistre `ErrUnsupportedMultishot` : l'interaction reste active et nécessite un propriétaire d'abonnement. La boucle traite tout le lot avant de reprendre les réponses. Les réponses stables antérieures au défaut peuvent encore terminer ; leurs suites et les suspensions restantes sont abandonnées selon le contrat de l'adaptateur. `Poll` renvoie d'abord les résultats du préfixe terminé, puis l'erreur conservée lors d'un appel ultérieur ; `Run` renvoie les résultats recueillis avec cette erreur.
+
+Les résultats de `Loop.Poll` sont empruntés jusqu'au prochain `Poll`, `Run` ou `Drain`. Copiez les valeurs à conserver. À l'expiration, les références du runner sont effacées. Cet effacement ne libère pas les ressources : requêtes natives, descripteurs et prêts de buffers gardent leurs propriétaires. Appelez `Loop.Drain` même après une complétion ou un échec pour restituer le slab.
 
 `Loop.Failed()` renvoie l'erreur fatale enregistrée (ou `nil`). `Loop.Drain()` force la boucle dans l'état disposé, écarte chaque suspension pendante exactement une fois et n'enregistre `ErrDisposed` que si aucune erreur fatale n'était déjà présente ; la méthode est idempotente et préserve toute erreur fatale préexistante.
 
 ```go
-loop := takt.NewLoop[*myBackend, int](backend, takt.WithMaxCompletions(64))
+loop := takt.NewLoop[*myBackend, int](backend, 128, takt.WithMaxCompletions(64))
+defer loop.Drain()
 
-// Soumettre des calculs
-loop.SubmitExpr(exprComputation1)
-loop.SubmitExpr(exprComputation2)
-loop.Submit(contComputation) // kont.Eff
-
-// Faire avancer le tout jusqu'à complétion
-results, err := loop.Run()
+result, done, err := loop.SubmitExpr(exprComputation)
+if err != nil {
+	return err
+}
+if done {
+	fmt.Println(result)
+} else {
+	results, err := loop.Run()
+	fmt.Println(results)
+	if err != nil {
+		return err
+	}
+}
 ```
 
 ### Exécuteur de stream / abonnement
@@ -165,28 +180,37 @@ _ = events
 _ = err
 ```
 
+### Mémoire des complétions
+
 `NewLoop` utilise [`HeapMemory`](completion_memory.go) comme fournisseur par défaut du buffer de complétion. Si vous voulez que ces buffers proviennent d'un pool borné et stable de slabs de 128 KiB de taille par défaut, passez [`BoundedMemory`](completion_memory.go) via [`WithMemory`](option.go) ; ou fournissez n'importe quelle implémentation de `CompletionMemory` pour contrôler la stratégie d'allocation sans élargir les contrats de `Backend` ni de `Completion`. Les fournisseurs personnalisés doivent renvoyer des slabs vivants exclusifs et non chevauchants, et peuvent traiter `Release` comme un transfert de propriété vers le fournisseur :
 
 ```go
 // Par défaut : HeapMemory + slab de complétion de taille par défaut.
-loop := takt.NewLoop[*myBackend, int](backend)
+defaultLoop := takt.NewLoop[*myBackend, int](backend, 128)
+defer defaultLoop.Drain()
 
 // Limite la longueur du slab de complétion par scrutation (le fournisseur choisit la forme du slab ; Loop tronque la longueur visible à ce plafond).
-loop = takt.NewLoop[*myBackend, int](backend, takt.WithMaxCompletions(64))
+cappedLoop := takt.NewLoop[*myBackend, int](backend, 128, takt.WithMaxCompletions(64))
+defer cappedLoop.Drain()
 
-// Partage le sync.Pool d'un même HeapMemory entre plusieurs Loops en passant la même adresse à WithMemory ; copier une valeur HeapMemory ne partagerait pas les slabs recyclés.
+// Partagez le même pointeur HeapMemory entre boucles. Ne copiez ni HeapMemory ni BoundedMemory après leur première utilisation.
 heap := &takt.HeapMemory{}
-loopA := takt.NewLoop[*myBackend, int](backend, takt.WithMemory(heap))
-loopB := takt.NewLoop[*myBackend, int](backend, takt.WithMemory(heap))
+loopA := takt.NewLoop[*myBackend, int](backendA, 128, takt.WithMemory(heap))
+defer loopA.Drain()
+loopB := takt.NewLoop[*myBackend, int](backendB, 128, takt.WithMemory(heap))
+defer loopB.Drain()
 
 // BoundedMemory : un pool borné de slabs de 128 KiB de taille par défaut. WithPoolCapacity ajuste la capacité de ce pool (iobuf l'arrondit à la puissance de deux supérieure).
 bounded := takt.NewBoundedMemory(takt.WithPoolCapacity(4))
-loop = takt.NewLoop[*myBackend, int](
-	backend,
+boundedLoop := takt.NewLoop[*myBackend, int](
+	backend, 128,
 	takt.WithMemory(bounded),
 	takt.WithMaxCompletions(64),
 )
+defer boundedLoop.Drain()
 ```
+
+`BoundedMemory` limite le stockage conservé dans le pool, pas toute la mémoire utilisée. Si le pool est épuisé, un slab supplémentaire de taille par défaut est alloué ; les demandes plus grandes allouent des slabs de taille exacte. `Release` ne conserve pas ces slabs supplémentaires. Appelez `Drain` sur chaque boucle pour rendre son stockage, même après la fin du calcul ou un échec ; la libération des ressources natives reste à la charge de l'intégration.
 
 ## Aperçu de l'API
 
@@ -220,13 +244,18 @@ loop = takt.NewLoop[*myBackend, int](
 - `CompletionBufOption`: option fonctionnelle pour `CompletionMemory.CompletionBuf` (`WithSize`)
 - `BoundedMemoryOption`: option fonctionnelle pour `NewBoundedMemory` (`WithPoolCapacity`)
 - `Token`: corrélation soumission-complétion (`uint64`)
-- `Completion`: `{Token, Value kont.Resumed, Err error}`
-- `NewLoop[B, R](b B, opts ...Option) *Loop[B, R]`: crée une boucle d'événements (avec `HeapMemory` et un slab par défaut si rien n'est précisé)
-- `(*Loop[B, R]).SubmitExpr(m kont.Expr[R]) (R, bool, error)`: avance d'un pas et soumet un Expr
-- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)`: avance d'un pas et soumet un `kont.Eff`
+- `Completion`: token, résultat et charge de réponse directe ou inline
+- `Completion.ResumeValue() kont.Resumed`: obtient la réponse dans l'une ou l'autre représentation
+- `CompletionDecoder`: décode deux mots sans pointeurs lors de la reprise
+- `NewInlineCompletion(token Token, word0, word1 uint64, decoder CompletionDecoder, err error) Completion`: construit une complétion inline
+- `NewLoop[B, R](b B, capacity int, opts ...Option) *Loop[B, R]`: crée une boucle d'événements (avec `HeapMemory` et un slab par défaut si rien n'est précisé)
+- `(*Loop[B, R]).SubmitExpr(m kont.Expr[R]) (R, bool, error)`: réserve et évalue ; résultat immédiat ou suspension en file
+- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)`: réserve et réifie ; résultat immédiat ou suspension en file
 - `(*Loop[B, R]).Poll() ([]R, error)`: sonde et dispatche les complétions
 - `(*Loop[B, R]).Run() ([]R, error)`: fait avancer le tout jusqu'à complétion
-- `(*Loop[B, R]).Pending() int`: nombre d'opérations en attente
+- `(*Loop[B, R]).SubmitSuspension(s *kont.Suspension[R]) error`
+- `(*Loop[B, R]).Ready() bool`
+- `(*Loop[B, R]).Pending() int`: lignées de calcul locales, y compris les tentatives différées
 - `(*Loop[B, R]).Failed() error`: erreur fatale terminale, ou nil
 - `(*Loop[B, R]).Drain() int`: abandonne les suspensions en attente et dispose la boucle
 - `ErrLiveTokenReuse`: le backend a réutilisé un jeton encore vivant dans la boucle
@@ -267,30 +296,8 @@ loop = takt.NewLoop[*myBackend, int](
 
 ## Schémas pratiques
 
-Une intégration complète à une boucle d'événements combine un `Dispatcher` (la sémantique synchrone) avec un `Backend` (le proactor) sous une même `Loop` :
+Utilisez un `Backend` avec `Loop`, ou un `Dispatcher` avec `Exec` et `Advance`. Ce sont des chemins distincts : Loop n'appelle pas automatiquement Dispatcher. `ExecError` et `AdvanceError` interprètent explicitement les effets d'erreur d'application. Un Loop brut exige un backend/interpréteur qui traite toutes les opérations admises, effets d'erreur compris. Les [exemples exécutables](example_test.go) montrent les suspensions suivantes, les résultats immédiats et l'admission différée au backend.
 
-```go
-// 1. Définir le dispatcher : associe une opération d'effet à un résultat iox.
-type myDispatcher struct{ /* ... */ }
-
-func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-	// Renvoyer (value, nil), (value, iox.ErrMore) ou (nil, iox.ErrWouldBlock).
-}
-
-// 2. Définir le backend : soumet les opérations au proactor de l'OS et sonde les complétions.
-type myBackend struct{ /* ... */ }
-func (b *myBackend) Submit(op kont.Operation) (takt.Token, error) { /* ... */ }
-func (b *myBackend) Poll(out []takt.Completion) (int, error)      { /* ... */ }
-
-// 3. Piloter : soumettre un ou plusieurs calculs, puis Run jusqu'à complétion.
-loop := takt.NewLoop[*myBackend, int](backend, takt.WithMaxCompletions(64))
-loop.SubmitExpr(prog1)
-loop.SubmitExpr(prog2)
-results, err := loop.Run()
-_ = results; _ = err
-```
-
-Pour la composition avec gestion d'erreurs, utilisez `ExecError` / `StepError` / `AdvanceError` à la place de leurs équivalents sans erreur ; `Throw` court-circuite le calcul en cours sans affecter les calculs frères de la même boucle. Le motif fusionné dispatcher+backend illustré ici est précisément celui qu'utilise `sess` pour rattacher un endpoint de session à un runtime d'E/S réel.
 
 ## Références
 

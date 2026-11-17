@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"code.hybscloud.com/iobuf"
 	"code.hybscloud.com/iox"
 	"code.hybscloud.com/kont"
 	"code.hybscloud.com/spin"
@@ -17,7 +18,10 @@ type routeState struct {
 	canceling bool
 }
 
-const routeShards = 64
+const (
+	cacheLineBytes = iobuf.CacheLineSize
+	routeShards    = 64
+)
 
 type routeShard struct {
 	sl    spin.Lock
@@ -26,9 +30,8 @@ type routeShard struct {
 	_     [cacheLineBytes - unsafe.Sizeof(spin.Lock{}) - unsafe.Sizeof(map[RouteID]routeState(nil)) - unsafe.Sizeof(atomic.Int32{})]byte
 }
 
-// Compile-time check: routeShard occupies exactly one cache line. The route
-// table mirrors Loop's token table so hot route lookup, insert, and delete
-// traffic stays shard-local.
+// Compile-time check: routeShard occupies exactly one cache line, keeping each
+// shard's lock and counters together.
 var _ [0]byte = [cacheLineBytes - unsafe.Sizeof(routeShard{})]byte{}
 
 type shardedRoutes [routeShards]routeShard

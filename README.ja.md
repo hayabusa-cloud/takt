@@ -15,7 +15,7 @@ proactor モデルでは、I/O 操作はカーネルに送信され、その完�
 
 `takt` はこの実行モデルを [kont](https://code.hybscloud.com/kont) エフェクトシステム上の抽象レイヤーとして提供します。`Dispatcher` は一度に 1 つの代数的エフェクトを評価し、[iox](https://code.hybscloud.com/iox) のアウトカム代数に従って結果を分類します。`Backend` は非同期エンジン、たとえば `io_uring` に操作を送信し、完了をポーリングします。`Loop` はそれらをまとめ、計算を送信し、バックエンドをポーリングし、トークンで完了を関連付け、中断された継続を再開します。
 
-等価な API が 2 つあります。`kont.Eff` はクロージャベースで合成しやすく、`kont.Expr` はフレームベースでホットパスの割り当てを抑えます。
+プログラムには 2 つの表現があります。`kont.Eff` は合成にクロージャを使い、`kont.Expr` はステップ実行用のフレームを公開します。`Reify` と `Reflect` が両者を接続します。割り当てと実行のコストはプログラムと実現方法に依存し、表現の選択だけではホットパスの低コストを保証しません。
 
 イベントループ経路は、生存中の各トークンにつき 1 つの保留サスペンションだけを保持します。各トークンは `kont.StepExpr`（または事前に `kont.Eff` を reify したもの）から生じたサスペンションを追跡するため、`Backend.Submit` はそのトークンを持つ古い送信がループ内でまだ生きている間は、そのトークンを再利用してはいけません。
 
@@ -104,28 +104,43 @@ if susp != nil {
 
 ### イベントループ
 
-`Loop` は `Backend` を通じて計算を駆動します。操作を送信し、完了をポーリングし、`Token` で関連付け、中断された継続を再開します。`NewLoop` は関数型 `Option` を受け取ります。`WithMaxCompletions(n)` は `n <= 0` のとき `takt: WithMaxCompletions requires n > 0` でパニックし、`WithMemory(nil)` は `takt: WithMemory requires a non-nil CompletionMemory` でパニックします。
+`Loop` へのすべてのアクセスを直列化してください。`Ready`、`Pending`、`Failed` も対象です。コールバックから状態を変更するメソッドへ再入してはいけません。構築後のループを値コピーしてはいけません。
+
+`NewLoop` には正の容量を指定します。`Submit` と `SubmitExpr` はローカルで処理を受け入れ、`Poll` がバックエンドへ投入します。容量不足による拒否ではプログラムの先頭部分も実行しません。`SubmitSuspension` は成功時だけ所有権を移します。`Ready` は新しい処理と延期された再試行を区別します。バッチ全体の処理後に継続を再開し、後続の投入は次の巡回で行います。ローカルな破棄はネイティブ資源の解放を意味しません。
+
+純粋な計算は即座に完了する場合があります。`Submit` や `SubmitExpr` の `done` と結果を確認してください。`WithMaxCompletions` は送信試行、観測、再開の各段階を個別に制限します。
 
 `Backend.Poll([]Completion) (int, error)` は、準備済み完了件数とインフラストラクチャのポーリング失敗の両方を報告します。バックエンドは、非 nil のポーリングレベル error と準備済み完了を同時に返してはいけません。`Loop` は `Poll` から返る `iox.ErrWouldBlock` を終端エラーではなくアイドルティックとして扱います。
+
+完了が成功または通常の失敗を示す場合、`Loop` は操作エラーを含む有効な応答を `Completion.ResumeValue()` で取得して再開します。通常のバックエンドは `Value` を設定します。ポインタを含まない固定サイズのペイロードには `NewInlineCompletion` と `CompletionDecoder` を使い、インターフェースへの格納を再開時まで遅らせることができます。`Value` を直接読んでもインラインペイロードはデコードされません。デコード時にはメモリ割り当てが発生する場合があります。
 
 `Loop` は単一所有者のランナーです。同じ `Loop` を共有する `SubmitExpr`, `Submit`, `Poll`, `Run`, `Drain`, `Pending`, `Failed` の呼び出しは直列化してください。
 
 `Backend.Submit` は、ループ内でまだ生存しているすべての送信の間で一意なトークンを返さなければなりません。トークンは相関キーであり、シーケンス番号ではありません。具体的なバックエンドは kernel `user_data` 値を直接使えます。バックエンドが生存中トークンを再利用した場合、ループは `ErrLiveTokenReuse` を記録し、すべての保留サスペンションをちょうど一度だけ破棄し、その後の `SubmitExpr` / `Submit` / `Poll` / `Run` はこの致命的エラーを返します。
 
-完了が `iox.ErrWouldBlock` を伴う場合、ループは同じ操作を再送信します。完了が `iox.ErrMore`（マルチショット）を伴う場合、ループは `ErrUnsupportedMultishot` を記録し、保留中のサスペンションをそれぞれ一度だけ破棄し、以降の `SubmitExpr` / `Submit` / `Poll` / `Run` 呼び出しはその致命的エラーを返します。`ErrMore` は CQE 後も送信済みのバックエンド操作が生存していることを意味しますが、汎用 `Loop` には同一トークンの後続完了を所有する購読またはキャンセルのキャリアがありません。
+`iox.ErrWouldBlock` を伴う完了は、同じサスペンションを次のラウンドへ延期します。旧リクエストが応答や隠れた部分進行を残さず終了していることが前提です。完了レベルの `iox.ErrMore` は `ErrUnsupportedMultishot` を記録します。対応する処理はまだ生存しており、購読の所有者が必要です。ループはバッチ全体を処理してから再開します。障害前の安定した応答は完了できますが、その後続と残りのサスペンションはバインディングの放棄契約に従って破棄されます。`Poll` は完了した前半の結果を先に返し、保存したエラーを後の呼び出しで返します。`Run` は収集した結果とエラーを同時に返します。
+
+`Loop.Poll` の結果は次の `Poll`、`Run`、`Drain` までの借用です。保持する値は先にコピーしてください。借用終了時にはランナー内の参照を消去します。参照の消去はリソース解放ではありません。ネイティブ要求、記述子、バッファの借用にはそれぞれの所有者が残ります。完了後や障害後も `Loop.Drain` を呼び、完了スラブを返却してください。
 
 `Loop.Failed()` は記録された致命的エラー（または `nil`）を返します。`Loop.Drain()` はループを廃棄状態へ強制し、保留中のサスペンションをそれぞれ一度だけ破棄し、致命的エラーが未設定の場合に限って `ErrDisposed` を記録します。冪等であり、既存の致命的エラーは保持されます。
 
 ```go
-loop := takt.NewLoop[*myBackend, int](backend, takt.WithMaxCompletions(64))
+loop := takt.NewLoop[*myBackend, int](backend, 128, takt.WithMaxCompletions(64))
+defer loop.Drain()
 
-// 計算を送信する
-loop.SubmitExpr(exprComputation1)
-loop.SubmitExpr(exprComputation2)
-loop.Submit(contComputation) // kont.Eff
-
-// すべて完了するまで進める
-results, err := loop.Run()
+result, done, err := loop.SubmitExpr(exprComputation)
+if err != nil {
+	return err
+}
+if done {
+	fmt.Println(result)
+} else {
+	results, err := loop.Run()
+	fmt.Println(results)
+	if err != nil {
+		return err
+	}
+}
 ```
 
 ### ストリーム / サブスクリプションランナー
@@ -165,28 +180,37 @@ _ = events
 _ = err
 ```
 
+### 完了バッファのメモリ
+
 `NewLoop` は完了バッファの既定プロバイダとして [`HeapMemory`](completion_memory.go) を使います。完了バッファを既定サイズ 128 KiB の slab から成る有界かつ安定したプールから取得したい場合は、[`WithMemory`](option.go) で [`BoundedMemory`](completion_memory.go) を渡してください。あるいは、`Backend` や `Completion` の契約を広げずに割り当て戦略を制御したい場合は、独自の `CompletionMemory` を実装してください。カスタムプロバイダは、生存中 slab を他と重ならない排他的なものとして返し、`Release` をプロバイダ側への所有権移譲として扱ってかまいません:
 
 ```go
 // 既定: HeapMemory + 既定サイズの完了バッファ。
-loop := takt.NewLoop[*myBackend, int](backend)
+defaultLoop := takt.NewLoop[*myBackend, int](backend, 128)
+defer defaultLoop.Drain()
 
 // 1 回のポーリングで扱う完了バッファ長に上限を設ける（プロバイダがバッファ形状を決め、Loop が可視長をこの上限まで切り詰める）。
-loop = takt.NewLoop[*myBackend, int](backend, takt.WithMaxCompletions(64))
+cappedLoop := takt.NewLoop[*myBackend, int](backend, 128, takt.WithMaxCompletions(64))
+defer cappedLoop.Drain()
 
-// 同じ HeapMemory のポインタを WithMemory に渡すことで、複数の Loop 間で sync.Pool を共有する。HeapMemory を値コピーすると再利用されたバッファは共有されない。
+// 同じ HeapMemory ポインタをループ間で共有します。初回使用後は HeapMemory や BoundedMemory をコピーしてはいけません。
 heap := &takt.HeapMemory{}
-loopA := takt.NewLoop[*myBackend, int](backend, takt.WithMemory(heap))
-loopB := takt.NewLoop[*myBackend, int](backend, takt.WithMemory(heap))
+loopA := takt.NewLoop[*myBackend, int](backendA, 128, takt.WithMemory(heap))
+defer loopA.Drain()
+loopB := takt.NewLoop[*myBackend, int](backendB, 128, takt.WithMemory(heap))
+defer loopB.Drain()
 
 // BoundedMemory: 既定サイズ 128 KiB の slab を保持する単一の有界プール。WithPoolCapacity でそのプール容量を調整する（iobuf が次の 2 の冪に切り上げる）。
 bounded := takt.NewBoundedMemory(takt.WithPoolCapacity(4))
-loop = takt.NewLoop[*myBackend, int](
-	backend,
+boundedLoop := takt.NewLoop[*myBackend, int](
+	backend, 128,
 	takt.WithMemory(bounded),
 	takt.WithMaxCompletions(64),
 )
+defer boundedLoop.Drain()
 ```
+
+`BoundedMemory` が制限するのはプールに保持するストレージであり、使用中のメモリ総量ではありません。プールが枯渇すると既定サイズの slab を追加で割り当て、それを超えるサイズの要求には要求どおりのサイズを割り当てます。`Release` はこれらの追加 slab を保持しません。計算の完了後や障害発生後も、各ループの `Drain` を呼んでストレージを返却してください。ネイティブリソースの解放は引き続きバインディングが担います。
 
 ## API 概要
 
@@ -220,13 +244,18 @@ loop = takt.NewLoop[*myBackend, int](
 - `CompletionBufOption`: `CompletionMemory.CompletionBuf` 用の関数型オプション（`WithSize`）
 - `BoundedMemoryOption`: `NewBoundedMemory` 用の関数型オプション（`WithPoolCapacity`）
 - `Token`: 送信と完了の対応付け（`uint64`）
-- `Completion`: `{Token, Value kont.Resumed, Err error}`
-- `NewLoop[B, R](b B, opts ...Option) *Loop[B, R]`: イベントループを作成する（既定では `HeapMemory` と既定サイズの slab を使用）
-- `(*Loop[B, R]).SubmitExpr(m kont.Expr[R]) (R, bool, error)`: 1 ステップ進めて `kont.Expr` を送信する
-- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)`: 1 ステップ進めて `kont.Eff` を送信する
+- `Completion`: トークン、結果状態、直接またはインライン形式の応答ペイロード
+- `Completion.ResumeValue() kont.Resumed`: どちらの表現からも応答を取得する
+- `CompletionDecoder`: 再開時にポインタを含まない 2 ワードをデコードする
+- `NewInlineCompletion(token Token, word0, word1 uint64, decoder CompletionDecoder, err error) Completion`: インライン完了を構築する
+- `NewLoop[B, R](b B, capacity int, opts ...Option) *Loop[B, R]`: イベントループを作成する（既定では `HeapMemory` と既定サイズの slab を使用）
+- `(*Loop[B, R]).SubmitExpr(m kont.Expr[R]) (R, bool, error)`: 容量確保後に評価；即時の結果またはキュー内のサスペンション
+- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)`: 容量確保後に reify；即時の結果またはキュー内のサスペンション
 - `(*Loop[B, R]).Poll() ([]R, error)`: 完了をポーリングしてディスパッチする
 - `(*Loop[B, R]).Run() ([]R, error)`: すべて完了するまで進める
-- `(*Loop[B, R]).Pending() int`: 保留中の操作数
+- `(*Loop[B, R]).SubmitSuspension(s *kont.Suspension[R]) error`
+- `(*Loop[B, R]).Ready() bool`
+- `(*Loop[B, R]).Pending() int`: 延期された再試行を含むローカル計算系列の数
 - `(*Loop[B, R]).Failed() error`: 終端致命エラー。未発生時は nil
 - `(*Loop[B, R]).Drain() int`: 保留中のサスペンションを破棄してループを廃棄する
 - `ErrLiveTokenReuse`: バックエンドがループ内でまだ生存しているトークンを再利用したことを示す
@@ -267,30 +296,8 @@ loop = takt.NewLoop[*myBackend, int](
 
 ## 実用レシピ
 
-完全なイベントループ統合では、`Dispatcher`（同期セマンティクス）と `Backend`（プロアクター）を 1 つの `Loop` の下に組み合わせます:
+`Loop` では `Backend`、`Exec` と `Advance` では `Dispatcher` を使います。これらは別の実行経路であり、Loop が自動的に Dispatcher を呼ぶわけではありません。`ExecError` と `AdvanceError` はアプリケーションのエラー効果を明示的に解釈します。素の Loop では、エラー効果を含むすべての受け入れ操作を扱えるバックエンドまたはインタプリタが必要です。[実行可能な例](example_test.go)では、後続サスペンション、即時の結果、バックエンドへの遅延送信を示します。
 
-```go
-// 1. dispatcher を定義する: 効果操作を iox の結果へ写す。
-type myDispatcher struct{ /* ... */ }
-
-func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
-	// (value, nil)、(value, iox.ErrMore)、または (nil, iox.ErrWouldBlock) を返す。
-}
-
-// 2. backend を定義する: OS プロアクターに操作を提出し、完了をポーリングする。
-type myBackend struct{ /* ... */ }
-func (b *myBackend) Submit(op kont.Operation) (takt.Token, error) { /* ... */ }
-func (b *myBackend) Poll(out []takt.Completion) (int, error)      { /* ... */ }
-
-// 3. 駆動する: 一つ以上の計算を提出し、Run で完了まで進める。
-loop := takt.NewLoop[*myBackend, int](backend, takt.WithMaxCompletions(64))
-loop.SubmitExpr(prog1)
-loop.SubmitExpr(prog2)
-results, err := loop.Run()
-_ = results; _ = err
-```
-
-エラー付きの合成には `ExecError` / `StepError` / `AdvanceError` を非エラー版の代わりに使います。`Throw` は進行中の計算を短絡しつつ、同じループ上の他の兄弟計算には影響を与えません。ここで示した dispatcher+backend 融合パターンは、`sess` がセッションエンドポイントを実 I/O ランタイムに接続するために用いているものと同じです。
 
 ## 参考文献
 

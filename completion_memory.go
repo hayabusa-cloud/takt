@@ -13,9 +13,10 @@ import (
 
 // CompletionMemory provides the [Completion] buffer used by a [Loop].
 //
-// It is consulted twice per [Loop] lifetime: once at construction
-// ([CompletionMemory.CompletionBuf]) and once at termination
-// ([CompletionMemory.Release]). It is a loop-level resource rather than a
+// It is consulted once at construction ([CompletionMemory.CompletionBuf]) and
+// once at explicit [Loop.Drain] ([CompletionMemory.Release]). Completion or
+// failure alone does not return the slab; callers must still drain the loop.
+// It is a loop-level resource rather than a
 // per-dispatch callback, so implementations can choose any allocation strategy
 // that fits their workload.
 //
@@ -106,8 +107,7 @@ const DefaultCompletionBufSize = defaultCompletionBufSize
 //
 // Pass `&takt.HeapMemory{}` (or the address of an existing HeapMemory
 // variable) to [WithMemory] so the underlying pool is shared across Loop
-// instances. Copying a HeapMemory value copies the embedded [sync.Pool] state
-// and therefore does not share recycled slabs.
+// instances. A HeapMemory must not be copied after first use.
 type HeapMemory struct {
 	pool sync.Pool
 }
@@ -147,10 +147,11 @@ func (h *HeapMemory) Release(buf []Completion) {
 //
 // It keeps a single bounded pool of default-sized 128 KiB slabs backed by
 // iobuf's lock-free MPMC pool ([iobuf.BoundedPool]). Requests up to
-// [DefaultCompletionBufSize] reuse the default slab shape; larger requests
-// fall back to fresh exact-size allocations. Overflow slabs are discarded in
-// [Release] so the bounded memory budget stays anchored to the
-// steady-state default slab.
+// [DefaultCompletionBufSize] reuse the default slab shape. Pool exhaustion
+// allocates an extra default-sized slab; larger requests allocate exact-size
+// slabs. [Release] does not retain these overflow slabs. Pool capacity bounds
+// retained pooled storage, not total live allocations.
+// A BoundedMemory must not be copied after first use.
 type BoundedMemory struct {
 	poolCapacity int
 	initOnce     sync.Once
@@ -210,8 +211,9 @@ func NewBoundedMemory(opts ...BoundedMemoryOption) *BoundedMemory {
 
 // CompletionBuf returns a [Completion] slab of length n (defaulting to
 // [DefaultCompletionBufSize] when [WithSize] is omitted). Requests up to the
-// default size reuse a bounded pool of default-sized slabs and are sliced back
-// to the requested length; larger requests allocate exact-size overflow slabs.
+// default size use a pooled default-sized slab when available, otherwise a
+// freshly allocated one, sliced back to the requested length. Larger requests
+// allocate exact-size overflow slabs.
 func (b *BoundedMemory) CompletionBuf(opts ...CompletionBufOption) []Completion {
 	cfg := resolveCompletionBufConfig(opts, DefaultCompletionBufSize)
 	if cfg.size <= DefaultCompletionBufSize {

@@ -5,147 +5,53 @@
 package takt
 
 import (
-	"sync/atomic"
-	"unsafe"
-
-	"code.hybscloud.com/iobuf"
 	"code.hybscloud.com/iox"
 	"code.hybscloud.com/kont"
-	"code.hybscloud.com/spin"
 )
 
-// cacheLineBytes mirrors iobuf.CacheLineSize for use in shared cache-line
-// padding constants across this package.
-const cacheLineBytes = iobuf.CacheLineSize
-
-func classifyCompletion(c Completion) iox.Outcome {
-	return iox.Classify(c.Err)
+type pending[R any] struct {
+	susp     *kont.Suspension[R]
+	reply    int // batch position; consumed before the completion slab is reused
+	deferred bool
 }
 
-type resumeResult[R any] struct {
-	done   bool
-	result R
-}
-
-const (
-	pendingShards = 64
-)
-
-type pendingShard[R any] struct {
-	sl    spin.Lock
-	items map[Token]*kont.Suspension[R]
-	size  atomic.Int32
-	_     [cacheLineBytes - unsafe.Sizeof(spin.Lock{}) - unsafe.Sizeof(map[Token]*kont.Suspension[R](nil)) - unsafe.Sizeof(atomic.Int32{})]byte
-}
-
-// Compile-time check: pendingShard occupies exactly one cache line. Future field
-// growth that would overflow the padding fails the build instead of silently
-// breaking the false-sharing guarantee. The shard is independent of R for size
-// purposes (map header and atomic.Int32 do not vary).
-var _ [0]byte = [cacheLineBytes - unsafe.Sizeof(pendingShard[struct{}]{})]byte{}
-
-type shardedPending[R any] [pendingShards]pendingShard[R]
-
-func newShardedPending[R any]() *shardedPending[R] {
-	var sp shardedPending[R]
-	for i := range pendingShards {
-		sp[i] = pendingShard[R]{
-			items: make(map[Token]*kont.Suspension[R]),
-		}
-	}
-	return &sp
-}
-
-func (sp *shardedPending[R]) store(tok Token, susp *kont.Suspension[R]) bool {
-	shard := &sp[tok%pendingShards]
-	shard.sl.Lock()
-	if _, ok := shard.items[tok]; ok {
-		shard.sl.Unlock()
-		return false
-	}
-	shard.size.Add(1)
-	shard.items[tok] = susp
-	shard.sl.Unlock()
-	return true
-}
-
-func (sp *shardedPending[R]) claim(tok Token) (*kont.Suspension[R], bool) {
-	shard := &sp[tok%pendingShards]
-	shard.sl.Lock()
-	susp, ok := shard.items[tok]
-	if ok {
-		delete(shard.items, tok)
-		shard.sl.Unlock()
-		shard.size.Add(-1)
-		return susp, true
-	}
-	shard.sl.Unlock()
-	return nil, false
-}
-
-func (sp *shardedPending[R]) size() int {
-	var n int
-	for i := range pendingShards {
-		n += int(sp[i].size.Load())
-	}
-	return n
-}
-
-// drainAll discards every stored suspension and returns the number drained.
-// It is used when the loop transitions to a fatal state so no
-// `*kont.Suspension[R]` is left pending.
-func (sp *shardedPending[R]) drainAll() int {
-	var drained int
-	for i := range pendingShards {
-		shard := &sp[i]
-		shard.sl.Lock()
-		for tok, susp := range shard.items {
-			susp.Discard()
-			delete(shard.items, tok)
-			drained++
-		}
-		shard.size.Store(0)
-		shard.sl.Unlock()
-	}
-	return drained
-}
-
-// Loop drives Expr computations through a Backend.
-// It owns pending `*kont.Suspension` frontiers keyed by [Token], so one live
-// token refers to at most one pending suspension at a time.
+// Loop owns a bounded set of affine computation lineages. Admission reserves
+// local capacity; Poll offers queued operations to the backend. A successor
+// reuses its predecessor's record. Native requests and backing storage remain
+// the backend binding's responsibility, including after Drain or failure.
 //
-// Loop is not safe for concurrent use. Callers must serialize methods that
-// share a Loop instance, including SubmitExpr, Submit, Poll, Run, Drain,
-// Pending, and Failed.
+// All access to one Loop must be serialized. State-changing calls must also be
+// non-reentrant, including callbacks reached during evaluation or resumption.
+// A Loop must not be copied after construction. Panics through callbacks are
+// outside the runner's abort contract. Replies must remain valid through batch
+// accounting and failure; discarded values require an admitted disposition.
 type Loop[B Backend[B], R any] struct {
-	backend     B
-	memory      CompletionMemory
-	pending     *shardedPending[R]
-	completions []Completion
-	results     []R
-	fatal       error
+	backend            B
+	memory             CompletionMemory
+	pending            table[Token, pending[R]]
+	admission, replies queue
+	fresh              int
+	completions        []Completion
+	results            []R
+	fatal              error
 }
 
-// NewLoop creates an event loop with the given backend. Behavior is configured
-// via functional [Option]s:
-//
-//   - [WithMemory] installs a custom [CompletionMemory] provider; the default is a
-//     fresh [HeapMemory] (sync.Pool-backed default-sized slabs).
-//   - [WithMaxCompletions] caps the completion slab length per poll;
-//     omitting it lets the CompletionMemory provider choose (typically
-//     [DefaultCompletionBufSize]).
-//
-// Use [BoundedMemory] via [WithMemory] when completion buffers should come from
-// a single bounded pool of default-sized 128 KiB slabs. Custom providers may
-// implement [CompletionMemory] for any allocation strategy without widening the
-// [Backend] or [Completion] contracts.
-func NewLoop[B Backend[B], R any](b B, opts ...Option) *Loop[B, R] {
+// NewLoop provisions capacity computation records. Capacity must be positive.
+// [WithMaxCompletions] independently bounds offers, observations and resumptions
+// per Poll. [WithMemory] selects the cold completion-slab provider. Construction
+// provisions all bookkeeping; arbitrary programs and backends can still allocate.
+func NewLoop[B Backend[B], R any](b B, capacity int, opts ...Option) *Loop[B, R] {
+	if capacity <= 0 {
+		panic("takt: capacity must be positive")
+	}
 	cfg := resolveLoopConfig(opts)
 	completions := newCompletionBuf(cfg.memory, cfg.maxCompletions)
 	return &Loop[B, R]{
 		backend:     b,
 		memory:      cfg.memory,
-		pending:     newShardedPending[R](),
+		pending:     newTable[Token, pending[R]](capacity),
+		admission:   newQueue(capacity),
+		replies:     newQueue(capacity),
 		completions: completions,
 		results:     make([]R, 0, len(completions)),
 	}
@@ -166,112 +72,169 @@ func newCompletionBuf(mem CompletionMemory, maxCompletions int) []Completion {
 	return buf
 }
 
-// SubmitExpr steps a [kont.Expr] computation and transfers its first
-// suspension to the backend.
-// The loop stores the resulting frontier under one token, so later completions
-// are expected to continue that same affine suspension lineage.
+// SubmitExpr reserves before evaluating m. Local capacity refusal returns
+// iox.ErrWouldBlock without executing a program prefix. A suspended result is
+// queued locally; backend acceptance occurs in a later Poll.
 func (l *Loop[B, R]) SubmitExpr(m kont.Expr[R]) (R, bool, error) {
+	var zero R
 	if l.fatal != nil {
-		var zero R
 		return zero, false, l.fatal
 	}
+	i := l.pending.reserve()
+	if i == -1 {
+		return zero, false, iox.ErrWouldBlock
+	}
+	return l.start(i, m)
+}
+
+func (l *Loop[B, R]) start(i int, m kont.Expr[R]) (R, bool, error) {
 	result, susp := kont.StepExpr(m)
 	if susp == nil {
+		l.pending.release(i)
 		return result, true, nil
 	}
-	if err := l.submit(susp); err != nil {
-		var zero R
-		return zero, false, err
-	}
+	l.enqueue(i, susp, false)
 	var zero R
 	return zero, false, nil
 }
 
-// Submit reifies a [kont.Eff] computation and submits it.
+// Submit reserves capacity before reifying m, so refusal executes no prefix.
 func (l *Loop[B, R]) Submit(m kont.Eff[R]) (R, bool, error) {
-	return l.SubmitExpr(kont.Reify(m))
+	var zero R
+	if l.fatal != nil {
+		return zero, false, l.fatal
+	}
+	i := l.pending.reserve()
+	if i == -1 {
+		return zero, false, iox.ErrWouldBlock
+	}
+	return l.start(i, kont.Reify(m))
 }
 
-func (l *Loop[B, R]) submit(susp *kont.Suspension[R]) error {
-	tok, err := l.backend.Submit(susp.Op())
-	if err != nil {
-		susp.Discard()
-		return err
+// SubmitSuspension transfers a reached suspension on nil. Any returned error
+// leaves it unconsumed and owned by the caller. susp must be non-nil and unused.
+func (l *Loop[B, R]) SubmitSuspension(susp *kont.Suspension[R]) error {
+	if l.fatal != nil {
+		return l.fatal
 	}
-	if !l.pending.store(tok, susp) {
-		susp.Discard()
-		l.poison(ErrLiveTokenReuse)
-		return ErrLiveTokenReuse
+	i := l.pending.reserve()
+	if i == -1 {
+		return iox.ErrWouldBlock
 	}
+	l.enqueue(i, susp, false)
 	return nil
 }
+func (l *Loop[B, R]) enqueue(i int, susp *kont.Suspension[R], deferred bool) {
+	l.pending.entries[i].value = pending[R]{susp: susp, deferred: deferred}
+	l.admission.push(i)
+	if !deferred {
+		l.fresh++
+	}
+}
 
-// Poll dispatches ready completions. A resumed suspension either completes or
-// is submitted again under a fresh token. Multishot completions (`iox.ErrMore`)
-// are rejected because the same backend submission remains active after the CQE,
-// while Loop only tracks one affine suspension per submitted operation. Concrete
-// runtimes that need multishot streams should own a subscription or cancel carrier
-// above this generic Loop.
+// Ready reports fresh admissions or retained replies. Deferred retries remain
+// Pending without forcing Ready. It does not promise backend acceptance.
+// External drivers supply readiness wakes or retry deadlines before parking.
+func (l *Loop[B, R]) Ready() bool {
+	return l.fatal == nil && (l.fresh > 0 || l.replies.size > 0)
+}
+
+// Poll runs one bounded driver round: offer a FIFO snapshot, service the backend,
+// account the whole batch, then resume replies in observation order. Successors
+// are offered in later rounds. Each explicit call permits bounded deferred retries.
+// WouldBlock preserves the reached suspension; completion-level WouldBlock also
+// requires that the old request retired with no reply or hidden partial progress.
+// More is unsupported by this one-shot runner.
 //
-// Returns completed results when one or more computations finish in the current
-// poll tick, a zero-length non-nil slice when work advanced without producing a
-// completed computation, (nil, nil) when idle, or (nil, err) on infrastructure
-// failure. Poll never returns both results and a non-nil error; if a fatal
-// failure arrives in the same tick as ready results, the failure is reported on
-// the next call.
-//
-// The returned []R aliases an internal buffer that is reused across Poll/Run
-// calls; callers that need to retain the slice past the next Poll/Run must
-// copy it.
-//
-// When the loop enters a fatal state, whether from an infrastructure poll
-// failure or a completion-driven failure such as [ErrUnsupportedMultishot] or
-// [ErrLiveTokenReuse], it discards every pending suspension exactly once before
-// returning.
+// Replies before a fatal observation may resume under the binding's stable-reply
+// and abort premises; their successors are discarded. The scalar abort profile
+// disposes the remaining batch. Resource-producing bindings must separately own
+// every undelivered result. Results already completed precede the stored error.
+// The returned slice is borrowed until the next Poll, Run or Drain. Copy values
+// that must survive that boundary; the runner clears its expired references.
 func (l *Loop[B, R]) Poll() ([]R, error) {
 	results, err, _ := l.step()
 	return results, err
 }
 
 func (l *Loop[B, R]) step() ([]R, error, bool) {
+	clear(l.results)
+	l.results = l.results[:0]
 	if l.fatal != nil {
 		return nil, l.fatal, false
 	}
-
-	var (
-		n        int
-		pollErr  error
-		progress bool
-	)
-	n, pollErr = l.backend.Poll(l.completions)
-	l.results = l.results[:0]
-	if n > 0 {
-		defer clearCompletions(l.completions[:n])
-	}
-
-	if pollErr != nil {
-		if iox.IsWouldBlock(pollErr) {
-			pollErr = nil
-		} else {
-			l.poison(pollErr)
-			return nil, pollErr, false
+	progress := false
+	for range min(l.admission.size, len(l.completions)) {
+		i := l.admission.pop()
+		p := &l.pending.entries[i].value
+		if !p.deferred {
+			l.fresh--
 		}
-	}
-
-	for i := range n {
-		ready, advanced, err := l.handleCompletion(l.completions[i])
-		if advanced {
-			progress = true
+		token, err := l.backend.Submit(p.susp.Op())
+		if iox.IsWouldBlock(err) {
+			p.deferred = true
+			l.admission.push(i)
+			continue
 		}
 		if err != nil {
 			l.poison(err)
-			if len(l.results) > 0 {
-				return l.results, nil, progress
-			}
 			return nil, err, progress
 		}
-		if ready.done {
-			l.results = append(l.results, ready.result)
+		if !l.pending.insert(i, token, uint64(token)) {
+			l.poison(ErrLiveTokenReuse)
+			return nil, l.fatal, progress
+		}
+	}
+	n, err := l.backend.Poll(l.completions)
+	if n > 0 {
+		defer clearCompletions(l.completions[:n])
+	}
+	if err != nil && !iox.IsWouldBlock(err) {
+		l.poison(err)
+		return nil, err, progress
+	}
+	for j := range n {
+		c := &l.completions[j]
+		// Every fetched entry has the binding's disposal, including a fatal suffix.
+		if l.fatal != nil {
+			continue
+		}
+		i := l.pending.remove(c.Token, uint64(c.Token))
+		if i == -1 {
+			continue
+		}
+		p := &l.pending.entries[i].value
+		switch iox.Classify(c.Err) {
+		case iox.OutcomeWouldBlock:
+			l.enqueue(i, p.susp, true)
+		case iox.OutcomeMore:
+			l.fatal = ErrUnsupportedMultishot
+		default:
+			p.reply = j
+			l.replies.push(i)
+		}
+	}
+	for range min(l.replies.size, len(l.completions)) {
+		i := l.replies.pop()
+		p := &l.pending.entries[i].value
+		result, next := p.susp.Resume(l.completions[p.reply].ResumeValue())
+		p.susp = nil
+		p.reply = 0
+		progress = true
+		if next == nil {
+			l.results = append(l.results, result)
+			l.pending.release(i)
+		} else if l.fatal != nil {
+			next.Discard()
+			l.pending.release(i)
+		} else {
+			l.enqueue(i, next, false)
+		}
+	}
+	if l.fatal != nil {
+		l.discard()
+		if len(l.results) == 0 {
+			return nil, l.fatal, progress
 		}
 	}
 	if len(l.results) == 0 && !progress {
@@ -280,101 +243,73 @@ func (l *Loop[B, R]) step() ([]R, error, bool) {
 	return l.results, nil, progress
 }
 
-// poison transitions the loop into the terminal fatal state and drains every
-// pending suspension. Idempotent: a second call preserves the original error.
 func (l *Loop[B, R]) poison(err error) {
 	if l.fatal == nil {
 		l.fatal = err
 	}
-	l.pending.drainAll()
+	l.discard()
 }
 
-func (l *Loop[B, R]) handleCompletion(c Completion) (resumeResult[R], bool, error) {
-	susp, ok := l.pending.claim(c.Token)
-	if !ok {
-		return resumeResult[R]{}, false, nil
+func (l *Loop[B, R]) discard() int {
+	n := l.pending.count
+	for i := range l.pending.entries {
+		if l.pending.entries[i].used {
+			if s := l.pending.entries[i].value.susp; s != nil {
+				s.Discard()
+			}
+			l.pending.release(i)
+		}
 	}
-
-	outcome := classifyCompletion(c)
-	if outcome == iox.OutcomeWouldBlock {
-		// Backend ownership ended with the completion token; a failed re-arm
-		// must discard the suspension before returning. WouldBlock remains a
-		// no-progress observation even though the suspension is re-armed.
-		return resumeResult[R]{}, false, l.submit(susp)
+	for i := range l.pending.buckets {
+		l.pending.buckets[i] = -1
 	}
-	if outcome == iox.OutcomeMore {
-		// ErrMore says the submitted backend operation is still live. Generic
-		// Loop has no subscription or cancel carrier for that active operation, so
-		// consuming the one-shot suspension would either leak future CQEs or
-		// retarget them to an unsubmitted successor effect.
-		susp.Discard()
-		return resumeResult[R]{}, true, ErrUnsupportedMultishot
-	}
-
-	result, next := susp.Resume(c.Value)
-
-	// OutcomeWouldBlock and OutcomeMore are handled above; only OK and Failure remain.
-	// OutcomeOK and OutcomeFailure follow the same resume path because the
-	// backend already encodes the operation result in Completion.Value.
-	if next == nil {
-		return resumeResult[R]{done: true, result: result}, true, nil
-	}
-	return resumeResult[R]{}, true, l.submit(next)
+	l.admission.size = 0
+	l.replies.size = 0
+	l.fresh = 0
+	return n
 }
 
-// Pending returns the count of in-flight operations.
-func (l *Loop[B, R]) Pending() int {
-	return l.pending.size()
-}
+// Pending counts local lineages, including queued and deferred work.
+// Zero does not establish native settlement or safe backing-storage release.
+func (l *Loop[B, R]) Pending() int { return l.pending.count }
 
-// Failed returns the loop's terminal fatal error, if any. A non-nil result
-// means every subsequent SubmitExpr, Submit, Poll, or Run call returns the same
-// error and all previously pending suspensions have been discarded exactly once.
-func (l *Loop[B, R]) Failed() error {
-	return l.fatal
-}
+// Failed returns the first terminal runner error, preserved by later calls.
+func (l *Loop[B, R]) Failed() error { return l.fatal }
 
-// Drain transitions the loop into a terminal disposed state and discards every
-// pending suspension exactly once. Drain is idempotent and safe to call after a
-// fatal failure has already been recorded; it preserves the existing fatal
-// error if one is set, otherwise it records [ErrDisposed] so subsequent
-// SubmitExpr, Submit, and Poll calls fail fast. Drain also returns the
-// completion slab to its [CompletionMemory] provider exactly once. It returns
-// the number of suspensions drained by this call.
+// Drain abandons every owned capture once under the binding's abort contract.
+// It releases the completion slab once and costs O(capacity). The native owner
+// must continue servicing outstanding requests and resource uses.
 func (l *Loop[B, R]) Drain() int {
 	if l.fatal == nil {
 		l.fatal = ErrDisposed
 	}
-	drained := l.pending.drainAll()
+	n := l.discard()
 	if l.completions != nil {
 		l.memory.Release(l.completions)
 		l.completions = nil
 	}
-	return drained
+	clear(l.results)
+	l.results = l.results[:0]
+	return n
 }
 
-// Run polls until every pending operation completes or the loop transitions to
-// a fatal state. The returned []R is freshly allocated and owned by the
-// caller, so it does not alias any internal buffer (unlike [Loop.Poll]). On a
-// fatal failure Run returns the partial results accumulated so far together
-// with the fatal error; subsequent SubmitExpr/Submit/Poll/Run calls return the
-// same stored error.
+// Run collects pending results into a caller-owned allocating slice. It uses
+// adaptive backoff as a retry timer. Fresh local work prevents parking; mere
+// refusal or rearming does not reset backoff. It is not a native cleanup driver.
 func (l *Loop[B, R]) Run() ([]R, error) {
+	clear(l.results)
+	l.results = l.results[:0]
 	if l.fatal != nil {
 		return nil, l.fatal
 	}
-	pending := l.Pending()
-	if pending == 0 {
+	if l.Pending() == 0 {
 		return nil, nil
 	}
-	all := make([]R, 0, pending)
+	all := make([]R, 0, l.Pending())
 	var bo iox.Backoff
-	for pending > 0 {
+	for l.Pending() > 0 {
 		results, err, progress := l.step()
-		if len(results) > 0 {
-			all = append(all, results...)
-			pending -= len(results)
-		}
+		all = append(all, results...)
 		if err != nil {
 			return all, err
 		}
@@ -383,7 +318,8 @@ func (l *Loop[B, R]) Run() ([]R, error) {
 		}
 		if progress {
 			bo.Reset()
-		} else {
+		}
+		if l.Pending() > 0 && !l.Ready() && !progress {
 			bo.Wait()
 		}
 	}
