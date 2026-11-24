@@ -17,7 +17,7 @@ En el modelo proactor, el backend acepta solicitudes de E/S y notifica su finali
 
 Los programas tienen dos representaciones: `kont.Eff` usa clausuras para la composición y `kont.Expr` expone marcos para avanzar por pasos. `Reify` y `Reflect` las conectan. El coste de asignación y ejecución depende del programa y su realización; la representación por sí sola no garantiza una ruta crítica más barata.
 
-La ruta del bucle de eventos guarda una sola suspensión pendiente por cada token vivo. Cada token sigue una suspensión producida por `kont.StepExpr` (o por reificar antes `kont.Eff`), por lo que `Backend.Submit` no debe reutilizar un token mientras el envío anterior que lo porta siga vivo en el bucle.
+El bucle de eventos asocia una suspensión pendiente a cada token activo. Cuando `Backend.Submit` acepta una operación, su token debe ser único entre los envíos que siguen activos en el bucle.
 
 Para integraciones de estilo stream o multishot, `SubscriptionLoop` proporciona un ejecutor abstracto de rutas separado. Rastrea valores `Subscription` por `RouteID` (`Token` más generación), sondea valores `StreamCompletion`, emite observaciones `StreamEvent` y conserva `More` como evidencia de vida de la ruta independiente del valor de carga o del error de carga. Así el `Loop` genérico sigue siendo afín y de un solo disparo, mientras los entornos de ejecución concretos tienen un lugar explícito para representar observaciones sucesoras de la misma operación.
 
@@ -262,7 +262,7 @@ defer boundedLoop.Drain()
 - `NewInlineCompletion(token Token, word0, word1 uint64, decoder CompletionDecoder, err error) Completion`: construye una finalización inline
 - `NewLoop[B, R](b B, capacity int, opts ...Option) *Loop[B, R]`: crea un bucle de eventos (`HeapMemory` y slab predeterminado por defecto)
 - `(*Loop[B, R]).SubmitExpr(m kont.Expr[R]) (R, bool, error)`: reserva y evalúa; resultado inmediato o suspensión en cola
-- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)`: reserva y reifica; resultado inmediato o suspensión en cola
+- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)` reserva una plaza antes de llamar a `kont.Step(m)` y después devuelve el resultado o pone la suspensión en cola.
 - `(*Loop[B, R]).Poll() ([]R, error)`: sondea y despacha finalizaciones
 - `(*Loop[B, R]).Run() ([]R, error)`: conduce todo hasta completar
 - `(*Loop[B, R]).SubmitSuspension(s *kont.Suspension[R]) error`

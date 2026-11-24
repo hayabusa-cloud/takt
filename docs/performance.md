@@ -28,6 +28,7 @@ dispatch or cost equivalence. Completion-slab providers remain cold interfaces.
 
 | Benchmark | Timed work |
 |---|---|
+| `LoopSubmit` | Construct one `kont.Perform` computation, call `Loop.Submit`, and poll for its result on a one-slot loop with an in-memory backend. |
 | `LoopRefusal` | Bounded FIFO retry rounds over already admitted captures, varying capacity and offer budget. Excludes sleeping. |
 | `LoopBatch` | Submit the same expression repeatedly, capturing a fresh suspension each time, then poll once for the batch in reverse order. |
 | `SubscriptionLocality` | Poll 64 live events per iteration, cycling through the admitted routes. |
@@ -56,7 +57,7 @@ selects its declared dependencies. Capture ten samples on each revision.
 ```sh
 export GOWORK=off GOMAXPROCS=1
 go test -mod=readonly -run '^$' \
-  -bench '^Benchmark(LoopRefusal|LoopBatch|SubscriptionLocality|SubscriptionRetirement|DispatchFamily|DispatchControl|GuardedWriteRetry|AdvanceErrorRefusal)$' \
+  -bench '^Benchmark(LoopSubmit|LoopRefusal|LoopBatch|SubscriptionLocality|SubscriptionRetirement|DispatchFamily|DispatchControl|GuardedWriteRetry|AdvanceErrorRefusal)$' \
   -benchmem -benchtime=200ms -count=10 -timeout=5m . > baseline.txt
 # Repeat after the change, writing current.txt.
 benchstat baseline.txt current.txt

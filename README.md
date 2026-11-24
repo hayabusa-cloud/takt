@@ -17,7 +17,7 @@ In the proactor model, a backend accepts I/O requests and reports completions as
 
 Programs have two representations: `kont.Eff` uses closures for composition; `kont.Expr` exposes frames for stepping. `Reify` and `Reflect` connect them. Allocation and execution costs depend on the program and realization; neither representation alone guarantees a cheaper hot path.
 
-The event-loop path stores one pending suspension per live token. Each token tracks a suspension produced by `kont.StepExpr` (or by reifying `kont.Eff` first), so `Backend.Submit` must not reuse a token while the older submission carrying it remains live in the loop.
+The event loop tracks one pending suspension per live token. When `Backend.Submit` accepts an operation, its token must be unique among submissions still live in the loop.
 
 For stream or multishot-style integrations, `SubscriptionLoop` provides a separate abstract route runner. It tracks `Subscription` handles by `RouteID` (`Token` plus generation), polls `StreamCompletion` values, emits `StreamEvent` observations, and keeps `More` as route-liveness evidence independent of payload value or payload error. This keeps generic `Loop` affine and one-shot while still giving concrete runtimes a principled place to represent same-operation successor observations.
 
@@ -260,7 +260,7 @@ defer boundedLoop.Drain()
 - `NewInlineCompletion(token Token, word0, word1 uint64, decoder CompletionDecoder, err error) Completion`: construct an inline completion
 - `NewLoop[B, R](b B, capacity int, opts ...Option) *Loop[B, R]`: create an event loop (default `HeapMemory`, default-sized slab)
 - `(*Loop[B, R]).SubmitExpr(m kont.Expr[R]) (R, bool, error)`: reserved evaluation; immediate result or queued suspension
-- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)`: reserved reification; immediate result or queued suspension
+- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)` reserves a slot before calling `kont.Step(m)`, then returns the result or queues the suspension.
 - `(*Loop[B, R]).Poll() ([]R, error)`: poll and dispatch completions
 - `(*Loop[B, R]).Run() ([]R, error)`: drive all to completion
 - `(*Loop[B, R]).SubmitSuspension(s *kont.Suspension[R]) error`

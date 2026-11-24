@@ -17,7 +17,7 @@ Proactor モデルでは、バックエンドが I/O 要求を受け付け、完
 
 プログラムには 2 つの表現があります。`kont.Eff` は合成にクロージャを使い、`kont.Expr` はステップ実行用のフレームを公開します。`Reify` と `Reflect` が両者を接続します。割り当てと実行のコストはプログラムと実現方法に依存し、表現の選択だけではホットパスの低コストを保証しません。
 
-イベントループ経路は、生存中の各トークンにつき 1 つの保留サスペンションだけを保持します。各トークンは `kont.StepExpr`（または事前に `kont.Eff` を reify したもの）から生じたサスペンションを追跡するため、`Backend.Submit` はそのトークンを持つ古い送信がループ内でまだ生きている間は、そのトークンを再利用してはいけません。
+イベントループは、使用中の各トークンに 1 つの保留中のサスペンションを対応付けます。`Backend.Submit` が操作を受け付ける際は、ループ内の未完了の送信の間で一意なトークンを返します。
 
 ストリームまたは multishot 形式の統合には、`SubscriptionLoop` が別個の抽象ルートランナーを提供します。`RouteID`（`Token` と generation）で `Subscription` ハンドルを追跡し、`StreamCompletion` 値をポーリングし、`StreamEvent` 観測を発行し、`More` をペイロード値やペイロードエラーから独立したルート生存証拠として保持します。これにより汎用 `Loop` はアフィンで一回限りのまま保たれ、具体ランタイムは同一操作の後続観測を表す明確な場所を持てます。
 
@@ -262,7 +262,7 @@ defer boundedLoop.Drain()
 - `NewInlineCompletion(token Token, word0, word1 uint64, decoder CompletionDecoder, err error) Completion`: インライン完了を構築する
 - `NewLoop[B, R](b B, capacity int, opts ...Option) *Loop[B, R]`: イベントループを作成する（既定では `HeapMemory` と既定サイズの slab を使用）
 - `(*Loop[B, R]).SubmitExpr(m kont.Expr[R]) (R, bool, error)`: 容量確保後に評価；即時の結果またはキュー内のサスペンション
-- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)`: 容量確保後に reify；即時の結果またはキュー内のサスペンション
+- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)` はスロットを確保してから `kont.Step(m)` を呼び、結果を返すか、サスペンションをキューに追加します。
 - `(*Loop[B, R]).Poll() ([]R, error)`: 完了をポーリングしてディスパッチする
 - `(*Loop[B, R]).Run() ([]R, error)`: すべて完了するまで進める
 - `(*Loop[B, R]).SubmitSuspension(s *kont.Suspension[R]) error`

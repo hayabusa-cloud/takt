@@ -40,7 +40,7 @@ jobs:
             go list -mod=readonly -deps -test -f '{{with .Module}}{{.Path}} {{.Version}}{{end}}' . | sort -u
           } > "$RUNNER_TEMP/environment.txt"
           go test -mod=readonly -run '^$' \
-            -bench '^Benchmark(LoopRefusal|LoopBatch|SubscriptionLocality|SubscriptionRetirement|DispatchFamily|DispatchControl|GuardedWriteRetry|AdvanceErrorRefusal)$' \
+            -bench '^Benchmark(LoopSubmit|LoopRefusal|LoopBatch|SubscriptionLocality|SubscriptionRetirement|DispatchFamily|DispatchControl|GuardedWriteRetry|AdvanceErrorRefusal)$' \
             -benchmem -benchtime=200ms -count=10 -timeout=5m . | tee "$RUNNER_TEMP/benchmarks.txt"
           first_samples=$(awk '/^Benchmark/ && $4 == "ns/op" && !seen[$1]++' "$RUNNER_TEMP/benchmarks.txt")
           if [[ -z "$first_samples" ]]; then

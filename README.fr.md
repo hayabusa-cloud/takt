@@ -17,7 +17,7 @@ Dans le modèle proactor, un backend accepte les requêtes d'E/S et en signale l
 
 Les programmes ont deux représentations : `kont.Eff` utilise des fermetures pour la composition, et `kont.Expr` expose des frames pour avancer par étapes. `Reify` et `Reflect` les relient. Les coûts d'allocation et d'exécution dépendent du programme et de sa réalisation ; aucune représentation ne garantit à elle seule un chemin critique moins coûteux.
 
-Le chemin de boucle d'événements garde une seule suspension pendante par jeton vivant. Chaque jeton suit une suspension produite par `kont.StepExpr` (ou après réification de `kont.Eff`), donc `Backend.Submit` ne doit pas réutiliser un jeton tant que la soumission plus ancienne qui le porte reste vivante dans la boucle.
+La boucle d'événements associe une suspension en attente à chaque jeton actif. Lorsque `Backend.Submit` accepte une opération, son jeton doit être unique parmi les soumissions encore actives dans la boucle.
 
 Pour les intégrations de type stream ou multishot, `SubscriptionLoop` fournit un exécuteur abstrait de routes séparé. Il suit les valeurs `Subscription` par `RouteID` (`Token` plus génération), sonde les valeurs `StreamCompletion`, émet des observations `StreamEvent` et conserve `More` comme preuve de vie de route indépendante de la valeur de charge utile ou de l'erreur de charge utile. Le `Loop` générique reste ainsi affine et one-shot, tandis que les environnements d'exécution concrets disposent d'un endroit explicite pour représenter les observations successeures de la même opération.
 
@@ -262,7 +262,7 @@ defer boundedLoop.Drain()
 - `NewInlineCompletion(token Token, word0, word1 uint64, decoder CompletionDecoder, err error) Completion`: construit une complétion inline
 - `NewLoop[B, R](b B, capacity int, opts ...Option) *Loop[B, R]`: crée une boucle d'événements (avec `HeapMemory` et un slab par défaut si rien n'est précisé)
 - `(*Loop[B, R]).SubmitExpr(m kont.Expr[R]) (R, bool, error)`: réserve et évalue ; résultat immédiat ou suspension en file
-- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)`: réserve et réifie ; résultat immédiat ou suspension en file
+- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)` réserve une place avant d'appeler `kont.Step(m)`, puis renvoie le résultat ou met la suspension en file d'attente.
 - `(*Loop[B, R]).Poll() ([]R, error)`: sonde et dispatche les complétions
 - `(*Loop[B, R]).Run() ([]R, error)`: fait avancer le tout jusqu'à complétion
 - `(*Loop[B, R]).SubmitSuspension(s *kont.Suspension[R]) error`

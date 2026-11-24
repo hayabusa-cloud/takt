@@ -84,21 +84,11 @@ func (l *Loop[B, R]) SubmitExpr(m kont.Expr[R]) (R, bool, error) {
 	if i == -1 {
 		return zero, false, iox.ErrWouldBlock
 	}
-	return l.start(i, m)
-}
-
-func (l *Loop[B, R]) start(i int, m kont.Expr[R]) (R, bool, error) {
 	result, susp := kont.StepExpr(m)
-	if susp == nil {
-		l.pending.release(i)
-		return result, true, nil
-	}
-	l.enqueue(i, susp, false)
-	var zero R
-	return zero, false, nil
+	return result, l.finishSubmit(i, susp), nil
 }
 
-// Submit reserves capacity before reifying m, so refusal executes no prefix.
+// Submit reserves capacity before stepping m, so refusal executes no prefix.
 func (l *Loop[B, R]) Submit(m kont.Eff[R]) (R, bool, error) {
 	var zero R
 	if l.fatal != nil {
@@ -108,7 +98,17 @@ func (l *Loop[B, R]) Submit(m kont.Eff[R]) (R, bool, error) {
 	if i == -1 {
 		return zero, false, iox.ErrWouldBlock
 	}
-	return l.start(i, kont.Reify(m))
+	result, susp := kont.Step(m)
+	return result, l.finishSubmit(i, susp), nil
+}
+
+func (l *Loop[B, R]) finishSubmit(i int, susp *kont.Suspension[R]) bool {
+	if susp == nil {
+		l.pending.release(i)
+		return true
+	}
+	l.enqueue(i, susp, false)
+	return false
 }
 
 // SubmitSuspension transfers a reached suspension on nil. Any returned error

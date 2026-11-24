@@ -17,7 +17,7 @@
 
 程序有两种表示：`kont.Eff` 使用闭包进行组合，`kont.Expr` 暴露用于逐步执行的帧，二者通过 `Reify` 和 `Reflect` 转换。分配和执行成本取决于程序及其实现；仅选择一种表示并不能保证热路径成本更低。
 
-事件循环路径为每个存活 token 只保存一个挂起。每个 token 跟踪由 `kont.StepExpr`（或先将 `kont.Eff` reify 之后）产生的挂起，因此 `Backend.Submit` 不能在旧提交仍然存活于循环中时复用该 token。
+事件循环为每个活跃的 token 记录一个挂起。`Backend.Submit` 接受操作时，返回的 token 必须在循环中仍然活跃的提交中唯一。
 
 对于流式或 multishot 风格的集成，`SubscriptionLoop` 提供单独的抽象路由运行器。它通过 `RouteID`（`Token` 加 generation）跟踪 `Subscription` 句柄，轮询 `StreamCompletion` 值，发出 `StreamEvent` 观察，并把 `More` 保持为独立于载荷值和载荷错误的路由存活证据。这让通用 `Loop` 保持仿射、一次性，同时为具体运行时表示同一操作的后继观察提供明确位置。
 
@@ -262,7 +262,7 @@ defer boundedLoop.Drain()
 - `NewInlineCompletion(token Token, word0, word1 uint64, decoder CompletionDecoder, err error) Completion`: 构造内联完成事件
 - `NewLoop[B, R](b B, capacity int, opts ...Option) *Loop[B, R]`: 创建事件循环（默认使用 `HeapMemory` 与默认尺寸 slab）
 - `(*Loop[B, R]).SubmitExpr(m kont.Expr[R]) (R, bool, error)`: 预留容量后求值；立即返回结果或将挂起入队
-- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)`: 预留容量后 reify；立即返回结果或将挂起入队
+- `(*Loop[B, R]).Submit(m kont.Eff[R]) (R, bool, error)` 先预留一个槽位，再调用 `kont.Step(m)`，随后返回结果或将挂起入队。
 - `(*Loop[B, R]).Poll() ([]R, error)`: 轮询并派发完成事件
 - `(*Loop[B, R]).Run() ([]R, error)`: 驱动至全部完成
 - `(*Loop[B, R]).SubmitSuspension(s *kont.Suspension[R]) error`
