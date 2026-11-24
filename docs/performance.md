@@ -63,8 +63,10 @@ benchstat baseline.txt current.txt
 ```
 
 Use `benchstat` to compare the two files. Interleave runs when clock frequency
-or temperature drifts. The [Benchmarks workflow](../.github/workflows/benchmarks.yml)
-runs the same workloads. Its artifact contains all samples and the runner environment.
+or temperature drifts. Open a [Benchmarks run](https://github.com/hayabusa-cloud/takt/actions/workflows/benchmarks.yml)
+to read the first sample for each workload in the run summary. Under **Artifacts**,
+download `takt-benchmarks` for the same report (`summary.md`), all ten samples
+per workload (`benchmarks.txt`), and the runner environment (`environment.txt`).
 
 `ns/op` is the mean time for one benchmark iteration. Use `ns/offer` for
 refused submissions, `ns/result` for scalar batches, `ns/event` for live stream

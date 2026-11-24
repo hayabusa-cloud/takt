@@ -53,12 +53,13 @@ jobs:
             echo '~~~text'
             printf '%s\n' "$first_samples"
             echo '~~~'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee "$RUNNER_TEMP/summary.md" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v7
         with:
           name: takt-benchmarks
           path: |
+            ${{ runner.temp }}/summary.md
             ${{ runner.temp }}/benchmarks.txt
             ${{ runner.temp }}/environment.txt
           if-no-files-found: error
