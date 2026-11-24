@@ -40,6 +40,23 @@ func (p *performanceBackend) Poll(out []takt.Completion) (int, error) {
 	return n, nil
 }
 
+func BenchmarkLoopSubmit(b *testing.B) {
+	backend := &performanceBackend{ready: make([]takt.Token, 1), stride: 1}
+	loop := takt.NewLoop[*performanceBackend, byte](backend, 1, takt.WithMaxCompletions(1))
+	defer loop.Drain()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, done, err := loop.Submit(kont.Perform(performanceOp(0))); err != nil || done {
+			b.Fatalf("Submit returned done=%v, err=%v", done, err)
+		}
+		results, err := loop.Poll()
+		if err != nil || len(results) != 1 || results[0] != 7 {
+			b.Fatalf("Poll returned %v, %v", results, err)
+		}
+	}
+}
+
 // One owner per instance. Refused work stays live; Poll measures bounded retry
 // scheduling, not sleeping or provider acceptance latency.
 func BenchmarkLoopRefusal(b *testing.B) {
