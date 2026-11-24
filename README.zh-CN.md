@@ -194,7 +194,7 @@ fmt.Println(sub.ID(), events)
 
 ### 完成缓冲区内存
 
-`NewLoop` 默认使用 [`HeapMemory`](completion_memory.go) 作为完成事件缓冲区的提供器。如果希望这些缓冲区来自一个保存默认尺寸 128 KiB slab 的有界稳态池，可以通过 [`WithMemory`](option.go) 传入 [`BoundedMemory`](completion_memory.go)；也可以实现自定义 `CompletionMemory`，在不扩展 `Backend` 与 `Completion` 契约的前提下控制分配策略。自定义提供器必须返回彼此独占且不重叠的存活 slab，并且可以把 `Release` 视为所有权回交给提供器：
+`NewLoop` 默认使用 [`HeapMemory`](completion_memory.go) 作为完成事件缓冲区的提供器。如果希望这些缓冲区来自一个保存默认尺寸 512 KiB slab 的有界稳态池，可以通过 [`WithMemory`](option.go) 传入 [`BoundedMemory`](completion_memory.go)；也可以实现自定义 `CompletionMemory`，在不扩展 `Backend` 与 `Completion` 契约的前提下控制分配策略。自定义提供器必须返回彼此独占且不重叠的存活 slab，并且可以把 `Release` 视为所有权回交给提供器：
 
 ```go
 // 默认：HeapMemory + 默认尺寸完成事件缓冲区。
@@ -212,7 +212,7 @@ defer loopA.Drain()
 loopB := takt.NewLoop[*myBackend, int](backendB, 128, takt.WithMemory(heap))
 defer loopB.Drain()
 
-// BoundedMemory：一个有界池，保存默认尺寸 128 KiB 的 slab。WithPoolCapacity 用于调整该池容量（iobuf 会向上取整到最近的 2 的幂）。
+// BoundedMemory：一个有界池，保存默认尺寸 512 KiB 的 slab。WithPoolCapacity 用于调整该池容量（iobuf 会向上取整到最近的 2 的幂）。
 bounded := takt.NewBoundedMemory(takt.WithPoolCapacity(4))
 boundedLoop := takt.NewLoop[*myBackend, int](
 	backend, 128,
@@ -251,7 +251,7 @@ defer boundedLoop.Drain()
 - `Backend[B Backend[B]]`: 异步 submit/poll 接口
 - `CompletionMemory`: 循环本地的完成事件缓冲区提供器
 - `HeapMemory`: 默认实现（基于 `sync.Pool` 的默认尺寸类型化 slab）
-- `BoundedMemory`: 基于 iobuf 的实现，带一个保存默认尺寸 128 KiB slab 的有界池
+- `BoundedMemory`: 基于 iobuf 的实现，带一个保存默认尺寸 512 KiB slab 的有界池
 - `Option`: `NewLoop` 的函数式选项（`WithMemory`, `WithMaxCompletions`）
 - `CompletionBufOption`: `CompletionMemory.CompletionBuf` 的函数式选项（`WithSize`）
 - `BoundedMemoryOption`: `NewBoundedMemory` 的函数式选项（`WithPoolCapacity`）

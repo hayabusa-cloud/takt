@@ -9,7 +9,6 @@ import (
 	"testing"
 	"unsafe"
 
-	"code.hybscloud.com/iobuf"
 	"code.hybscloud.com/kont"
 	"code.hybscloud.com/takt"
 )
@@ -17,13 +16,13 @@ import (
 var _ [takt.DefaultCompletionBufSize]struct{}
 
 func TestDefaultCompletionBufSize(t *testing.T) {
-	want := iobuf.BufferSizeLarge / int(unsafe.Sizeof(takt.Completion{}))
+	const wantBytes = 512 << 10
+	if takt.DefaultCompletionBufBytes != wantBytes {
+		t.Fatalf("DefaultCompletionBufBytes=%d want %d", takt.DefaultCompletionBufBytes, wantBytes)
+	}
+	want := wantBytes / int(unsafe.Sizeof(takt.Completion{}))
 	if takt.DefaultCompletionBufSize != want {
 		t.Fatalf("DefaultCompletionBufSize=%d want %d", takt.DefaultCompletionBufSize, want)
-	}
-	if takt.DefaultCompletionBufBytes != iobuf.BufferSizeLarge {
-		t.Fatalf("DefaultCompletionBufBytes=%d want %d",
-			takt.DefaultCompletionBufBytes, iobuf.BufferSizeLarge)
 	}
 }
 
@@ -335,6 +334,18 @@ func TestNewLoopRejectsEmptyDefaultCompletionBuffer(t *testing.T) {
 	}()
 	_ = takt.NewLoop[*observingBackend, int](&observingBackend{}, 1024,
 		takt.WithMemory(emptyDefaultMemory{}))
+}
+
+func TestNewLoopUsesCustomDefaultBufferSize(t *testing.T) {
+	b := &observingBackend{}
+	l := takt.NewLoop[*observingBackend, int](b, 1, takt.WithMemory(oversizedMemory{}))
+	defer l.Drain()
+	if _, err := l.Poll(); err != nil {
+		t.Fatal(err)
+	}
+	if b.seenBufLen != 16 {
+		t.Fatalf("Poll buffer len=%d want 16", b.seenBufLen)
+	}
 }
 
 func TestNewLoopCapsVisibleLengthOnOversizedProvider(t *testing.T) {

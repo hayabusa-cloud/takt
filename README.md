@@ -192,7 +192,7 @@ fmt.Println(sub.ID(), events)
 
 ### Completion Memory
 
-`NewLoop` uses [`HeapMemory`](completion_memory.go) as the default completion-buffer provider. Pass [`BoundedMemory`](completion_memory.go) via [`WithMemory`](option.go) when completion buffers should come from a bounded steady-state pool of default-sized 128 KiB slabs; or supply a custom `CompletionMemory` implementation to control allocation strategy without widening the `Backend` or `Completion` contracts. Custom providers must return exclusive non-overlapping live slabs and may treat `Release` as ownership transfer back to the provider:
+`NewLoop` uses [`HeapMemory`](completion_memory.go) as the default completion-buffer provider. Pass [`BoundedMemory`](completion_memory.go) via [`WithMemory`](option.go) when completion buffers should come from a bounded steady-state pool of default-sized 512 KiB slabs; or supply a custom `CompletionMemory` implementation to control allocation strategy without widening the `Backend` or `Completion` contracts. Custom providers must return exclusive non-overlapping live slabs and may treat `Release` as ownership transfer back to the provider:
 
 ```go
 // Default: HeapMemory + default-sized completion slab.
@@ -210,7 +210,7 @@ defer loopA.Drain()
 loopB := takt.NewLoop[*myBackend, int](backendB, 128, takt.WithMemory(heap))
 defer loopB.Drain()
 
-// BoundedMemory: one bounded pool of default-sized 128 KiB slabs. WithPoolCapacity tunes that pool's capacity (rounded up to the next power of two by iobuf).
+// BoundedMemory: one bounded pool of default-sized 512 KiB slabs. WithPoolCapacity tunes that pool's capacity (rounded up to the next power of two by iobuf).
 bounded := takt.NewBoundedMemory(takt.WithPoolCapacity(4))
 boundedLoop := takt.NewLoop[*myBackend, int](
 	backend, 128,
@@ -249,7 +249,7 @@ defer boundedLoop.Drain()
 - `Backend[B Backend[B]]`: asynchronous submit/poll interface
 - `CompletionMemory`: loop-local completion-buffer provider
 - `HeapMemory`: default implementation (`sync.Pool`-backed typed slabs of the default size)
-- `BoundedMemory`: iobuf-backed implementation with a single bounded pool of default-sized 128 KiB slabs
+- `BoundedMemory`: iobuf-backed implementation with a single bounded pool of default-sized 512 KiB slabs
 - `Option`: functional options for `NewLoop` (`WithMemory`, `WithMaxCompletions`)
 - `CompletionBufOption`: functional options for `CompletionMemory.CompletionBuf` (`WithSize`)
 - `BoundedMemoryOption`: functional options for `NewBoundedMemory` (`WithPoolCapacity`)
