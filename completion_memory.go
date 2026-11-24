@@ -25,8 +25,8 @@ import (
 // by the backend.
 //
 // takt ships with two built-ins: [HeapMemory] (the implicit default of
-// [NewLoop]) and [BoundedMemory] (a single bounded pool of default-sized 128
-// KiB slabs). Custom providers may implement CompletionMemory directly.
+// [NewLoop]) and [BoundedMemory] (a single bounded pool of default-sized slabs).
+// Custom providers may implement CompletionMemory directly.
 //
 // Requirements:
 //   - when [WithSize] is supplied, CompletionBuf must return at least that
@@ -85,20 +85,17 @@ func resolveCompletionBufConfig(opts []CompletionBufOption, fallback int) comple
 // compile time on the target architecture.
 const completionSize = unsafe.Sizeof(Completion{})
 
-// DefaultCompletionBufBytes anchors the default completion slab byte budget
-// to iobuf's canonical "register buffer" size class
-// ([iobuf.BufferSizeLarge], 128 KiB).
-const DefaultCompletionBufBytes = iobuf.BufferSizeLarge
+// DefaultCompletionBufBytes is the 512 KiB budget for a default completion slab.
+const DefaultCompletionBufBytes = iobuf.BufferSizeGreat
 
 const defaultCompletionBufSize = DefaultCompletionBufBytes / int(completionSize)
 
 type defaultCompletionSlab [defaultCompletionBufSize]Completion
 
 // DefaultCompletionBufSize is the number of [Completion] entries that fit in
-// one [DefaultCompletionBufBytes] block. This is the slab length [HeapMemory]
-// returns from [HeapMemory.CompletionBuf] when no [WithSize] option is
-// supplied, and the implicit [NewLoop] choice when [WithMaxCompletions] is
-// not given.
+// [DefaultCompletionBufBytes] bytes. [HeapMemory] and [BoundedMemory] use this
+// default length, as does [SubscriptionLoop] for any stream payload type.
+// A custom [CompletionMemory] can supply a different default to [NewLoop].
 const DefaultCompletionBufSize = defaultCompletionBufSize
 
 // HeapMemory is the default [CompletionMemory]: a [sync.Pool]-backed cache of
@@ -145,7 +142,7 @@ func (h *HeapMemory) Release(buf []Completion) {
 // BoundedMemory is an `iobuf`-backed [CompletionMemory] provider for steady-state
 // workloads.
 //
-// It keeps a single bounded pool of default-sized 128 KiB slabs backed by
+// It keeps a single bounded pool of default-sized slabs backed by
 // iobuf's lock-free MPMC pool ([iobuf.BoundedPool]). Requests up to
 // [DefaultCompletionBufSize] reuse the default slab shape. Pool exhaustion
 // allocates an extra default-sized slab; larger requests allocate exact-size
@@ -173,9 +170,8 @@ type poolSlab struct {
 
 // DefaultPoolCapacity is the default bounded-pool capacity used by
 // [BoundedMemory] when [WithPoolCapacity] is not supplied. `iobuf` rounds the
-// configured capacity up to the next power of two. With
-// [DefaultCompletionBufBytes] set to [iobuf.BufferSizeLarge], the default
-// bounded pool keeps a contiguous 1 MiB backing block of 8 slabs.
+// configured capacity up to the next power of two. The eight default slabs
+// share a backing array of approximately 4 MiB.
 const DefaultPoolCapacity = 8
 
 // BoundedMemoryOption configures a [BoundedMemory] at construction.

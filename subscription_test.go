@@ -544,14 +544,22 @@ func TestSubscriptionLoopFatalMethodsReturnStoredError(t *testing.T) {
 	}
 }
 
-func TestSubscriptionLoopRoutesMaxStreamCompletions(t *testing.T) {
-	b := &streamBackend{}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, takt.WithMaxStreamCompletions(3))
-	if _, err := l.Poll(); err != nil {
-		t.Fatalf("Poll error: %v", err)
-	}
-	if b.seenBufLen != 3 {
-		t.Fatalf("Poll buffer len=%d want 3", b.seenBufLen)
+func TestSubscriptionLoopCompletionBufferSize(t *testing.T) {
+	for _, tc := range []struct {
+		opts []takt.SubscriptionOption
+		want int
+	}{
+		{nil, takt.DefaultCompletionBufSize},
+		{[]takt.SubscriptionOption{takt.WithMaxStreamCompletions(3)}, 3},
+	} {
+		b := &streamBackend{}
+		l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, tc.opts...)
+		if _, err := l.Poll(); err != nil {
+			t.Fatalf("Poll error: %v", err)
+		}
+		if b.seenBufLen != tc.want {
+			t.Fatalf("Poll buffer len=%d want %d", b.seenBufLen, tc.want)
+		}
 	}
 }
 

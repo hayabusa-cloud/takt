@@ -90,7 +90,7 @@
 // from completion-batch size. With functional options, [WithMemory] installs
 // a custom provider, [WithMaxCompletions] caps the visible slice length,
 // [HeapMemory] is the default, and [BoundedMemory] provides a single bounded
-// pool of default-sized 128 KiB slabs. [Loop.Drain] releases that slice exactly
+// pool of default-sized 512 KiB slabs. [Loop.Drain] releases that slice exactly
 // once through [CompletionMemory.Release]. Custom providers must hand each live
 // loop an exclusive non-overlapping slab and may treat Release as ownership
 // transfer back to the provider.

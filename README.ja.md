@@ -194,7 +194,7 @@ fmt.Println(sub.ID(), events)
 
 ### 完了バッファのメモリ
 
-`NewLoop` は完了バッファの既定プロバイダとして [`HeapMemory`](completion_memory.go) を使います。完了バッファを既定サイズ 128 KiB の slab から成る有界かつ安定したプールから取得したい場合は、[`WithMemory`](option.go) で [`BoundedMemory`](completion_memory.go) を渡してください。あるいは、`Backend` や `Completion` の契約を広げずに割り当て戦略を制御したい場合は、独自の `CompletionMemory` を実装してください。カスタムプロバイダは、生存中 slab を他と重ならない排他的なものとして返し、`Release` をプロバイダ側への所有権移譲として扱ってかまいません:
+`NewLoop` は完了バッファの既定プロバイダとして [`HeapMemory`](completion_memory.go) を使います。完了バッファを既定サイズ 512 KiB の slab から成る有界かつ安定したプールから取得したい場合は、[`WithMemory`](option.go) で [`BoundedMemory`](completion_memory.go) を渡してください。あるいは、`Backend` や `Completion` の契約を広げずに割り当て戦略を制御したい場合は、独自の `CompletionMemory` を実装してください。カスタムプロバイダは、生存中 slab を他と重ならない排他的なものとして返し、`Release` をプロバイダ側への所有権移譲として扱ってかまいません:
 
 ```go
 // 既定: HeapMemory + 既定サイズの完了バッファ。
@@ -212,7 +212,7 @@ defer loopA.Drain()
 loopB := takt.NewLoop[*myBackend, int](backendB, 128, takt.WithMemory(heap))
 defer loopB.Drain()
 
-// BoundedMemory: 既定サイズ 128 KiB の slab を保持する単一の有界プール。WithPoolCapacity でそのプール容量を調整する（iobuf が次の 2 の冪に切り上げる）。
+// BoundedMemory: 既定サイズ 512 KiB の slab を保持する単一の有界プール。WithPoolCapacity でそのプール容量を調整する（iobuf が次の 2 の冪に切り上げる）。
 bounded := takt.NewBoundedMemory(takt.WithPoolCapacity(4))
 boundedLoop := takt.NewLoop[*myBackend, int](
 	backend, 128,
@@ -251,7 +251,7 @@ defer boundedLoop.Drain()
 - `Backend[B Backend[B]]`: 非同期 submit/poll インターフェース
 - `CompletionMemory`: ループローカルな完了バッファプロバイダ
 - `HeapMemory`: 既定実装（`sync.Pool` ベースの既定サイズ付き型付き slab）
-- `BoundedMemory`: iobuf ベースの実装。既定サイズ 128 KiB の slab を保持する単一の有界プールを持つ
+- `BoundedMemory`: iobuf ベースの実装。既定サイズ 512 KiB の slab を保持する単一の有界プールを持つ
 - `Option`: `NewLoop` 用の関数型オプション（`WithMemory`, `WithMaxCompletions`）
 - `CompletionBufOption`: `CompletionMemory.CompletionBuf` 用の関数型オプション（`WithSize`）
 - `BoundedMemoryOption`: `NewBoundedMemory` 用の関数型オプション（`WithPoolCapacity`）

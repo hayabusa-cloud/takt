@@ -194,7 +194,7 @@ fmt.Println(sub.ID(), events)
 
 ### Mémoire des complétions
 
-`NewLoop` utilise [`HeapMemory`](completion_memory.go) comme fournisseur par défaut du buffer de complétion. Si vous voulez que ces buffers proviennent d'un pool borné et stable de slabs de 128 KiB de taille par défaut, passez [`BoundedMemory`](completion_memory.go) via [`WithMemory`](option.go) ; ou fournissez n'importe quelle implémentation de `CompletionMemory` pour contrôler la stratégie d'allocation sans élargir les contrats de `Backend` ni de `Completion`. Les fournisseurs personnalisés doivent renvoyer des slabs vivants exclusifs et non chevauchants, et peuvent traiter `Release` comme un transfert de propriété vers le fournisseur :
+`NewLoop` utilise [`HeapMemory`](completion_memory.go) comme fournisseur par défaut du buffer de complétion. Si vous voulez que ces buffers proviennent d'un pool borné et stable de slabs de 512 KiB de taille par défaut, passez [`BoundedMemory`](completion_memory.go) via [`WithMemory`](option.go) ; ou fournissez n'importe quelle implémentation de `CompletionMemory` pour contrôler la stratégie d'allocation sans élargir les contrats de `Backend` ni de `Completion`. Les fournisseurs personnalisés doivent renvoyer des slabs vivants exclusifs et non chevauchants, et peuvent traiter `Release` comme un transfert de propriété vers le fournisseur :
 
 ```go
 // Par défaut : HeapMemory + slab de complétion de taille par défaut.
@@ -212,7 +212,7 @@ defer loopA.Drain()
 loopB := takt.NewLoop[*myBackend, int](backendB, 128, takt.WithMemory(heap))
 defer loopB.Drain()
 
-// BoundedMemory : un pool borné de slabs de 128 KiB de taille par défaut. WithPoolCapacity ajuste la capacité de ce pool (iobuf l'arrondit à la puissance de deux supérieure).
+// BoundedMemory : un pool borné de slabs de 512 KiB de taille par défaut. WithPoolCapacity ajuste la capacité de ce pool (iobuf l'arrondit à la puissance de deux supérieure).
 bounded := takt.NewBoundedMemory(takt.WithPoolCapacity(4))
 boundedLoop := takt.NewLoop[*myBackend, int](
 	backend, 128,
@@ -251,7 +251,7 @@ defer boundedLoop.Drain()
 - `Backend[B Backend[B]]`: interface asynchrone de submit/poll
 - `CompletionMemory`: fournisseur local du buffer de complétion de la boucle
 - `HeapMemory`: implémentation par défaut (`sync.Pool` avec slabs typés de taille par défaut)
-- `BoundedMemory`: implémentation adossée à iobuf avec un unique pool borné de slabs de 128 KiB de taille par défaut
+- `BoundedMemory`: implémentation adossée à iobuf avec un unique pool borné de slabs de 512 KiB de taille par défaut
 - `Option`: option fonctionnelle pour `NewLoop` (`WithMemory`, `WithMaxCompletions`)
 - `CompletionBufOption`: option fonctionnelle pour `CompletionMemory.CompletionBuf` (`WithSize`)
 - `BoundedMemoryOption`: option fonctionnelle pour `NewBoundedMemory` (`WithPoolCapacity`)
