@@ -52,23 +52,26 @@ func ExecErrorExpr[E any, D Dispatcher[D], R any](d D, m kont.Expr[R]) kont.Eith
 	return kont.HandleExpr(wrapped, h)
 }
 
-func rightUnwind[E, R any](_, _, _, current kont.Erased) (kont.Erased, kont.Frame) {
-	// Preserve kont's terminal nil-to-zero convention before wrapping the result.
+// rightFrame wraps a normal return and preserves kont's terminal nil-to-zero rule.
+type rightFrame[E, R any] struct{ kont.ReturnFrame }
+
+func (rightFrame[E, R]) Unwind(value kont.Erased) (kont.Erased, kont.Frame) {
 	var result R
-	if current != nil {
-		result = current.(R)
+	if value != nil {
+		result = value.(R)
 	}
-	return kont.Erased(kont.Right[E, R](result)), kont.ReturnFrame{}
+	return kont.Right[E](result), kont.ReturnFrame{}
 }
 
-// wrapRight converts an Expr[R] into Expr[Either[E, R]] using a pooled UnwindFrame.
-func wrapRight[E, R any](protocol kont.Expr[R]) kont.Expr[kont.Either[E, R]] {
-	if _, ok := protocol.Frame.(kont.ReturnFrame); ok {
-		return kont.ExprReturn(kont.Right[E, R](protocol.Value))
+func wrapRight[E, R any](m kont.Expr[R]) kont.Expr[kont.Either[E, R]] {
+	if _, done := m.Frame.(kont.ReturnFrame); done {
+		return kont.ExprReturn(kont.Right[E](m.Value))
 	}
-	uf := kont.AcquireUnwindFrame()
-	uf.Unwind = rightUnwind[E, R]
-	return kont.Expr[kont.Either[E, R]]{Frame: kont.ChainFrames(protocol.Frame, uf)}
+	// The first frame of m may read m.Value before it reaches an effect.
+	first := kont.AcquireThenFrame()
+	first.Second = kont.Expr[kont.Erased]{Value: m.Value, Frame: m.Frame}
+	first.Next = rightFrame[E, R]{}
+	return kont.ExprSuspend[kont.Either[E, R]](first)
 }
 
 // StepError evaluates a computation with error support until the first suspension.

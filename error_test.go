@@ -82,6 +82,25 @@ func TestExecErrorExprSuccess(t *testing.T) {
 	}
 }
 
+func TestErrorExprPreservesFirstFrameInput(t *testing.T) {
+	m := kont.Expr[int]{Value: 41, Frame: &kont.MapFrame[any, any]{
+		F:    func(v any) any { return v.(int) + 1 },
+		Next: kont.ReturnFrame{},
+	}}
+	t.Run("blocking", func(t *testing.T) {
+		r := takt.ExecErrorExpr[string](&testDispatcher{}, m)
+		if got, ok := r.GetRight(); !ok || got != 42 {
+			t.Fatalf("got %v, want Right(42)", r)
+		}
+	})
+	t.Run("stepping", func(t *testing.T) {
+		r, susp := takt.StepError[string](m)
+		if got, ok := r.GetRight(); !ok || got != 42 || susp != nil {
+			t.Fatalf("got %v, %v, want Right(42), nil", r, susp)
+		}
+	})
+}
+
 func TestErrorExprNilResult(t *testing.T) {
 	t.Run("interface", func(t *testing.T) { checkErrorExprResult[any](t, nil) })
 	t.Run("error", func(t *testing.T) { checkErrorExprResult[error](t, nil) })
