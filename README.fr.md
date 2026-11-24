@@ -110,7 +110,7 @@ Si la suspension d’une vue `cove.SuspensionView[C, kont.Either[E, A]]` est en 
 
 Un `Loop` pilote les calculs au travers d'un `Backend`. Il soumet les opérations, sonde les complétions, les corrèle par `Token` et reprend les continuations suspendues. `NewLoop` accepte des `Option` fonctionnelles. `WithMaxCompletions(n)` panique si `n <= 0` avec `takt: WithMaxCompletions requires n > 0` ; `WithMemory(nil)` panique avec `takt: WithMemory requires a non-nil CompletionMemory`.
 
-`NewLoop` et `NewSubscriptionLoop` exigent une capacité positive. `Submit` et `SubmitExpr` admettent le travail localement ; `Poll` le soumet au backend. Un refus de capacité n'exécute aucun préfixe du programme. `SubmitSuspension` transfère la suspension uniquement en cas de succès. `Ready` distingue le travail nouveau des tentatives différées. Chaque cycle traite le lot avant de reprendre les continuations ; les successeurs attendent un cycle ultérieur. La vidange locale ne libère pas les ressources natives.
+`NewLoop` et `NewSubscriptionLoop` exigent une capacité positive. `Submit` et `SubmitExpr` admettent le travail localement ; `Poll` le soumet au backend. Un refus de capacité n'exécute aucun préfixe du programme. `SubmitSuspension` transfère la suspension uniquement en cas de succès. `Ready` distingue le travail nouveau des tentatives différées. Chaque cycle traite le lot avant de reprendre les continuations ; les successeurs attendent un cycle ultérieur. La vidange locale ne libère pas les ressources natives. Voir le [contrat d'exécution](docs/execution.md).
 
 Un programme pur peut terminer immédiatement : vérifiez `done` et la valeur renvoyée par `Submit` ou `SubmitExpr`. `WithMaxCompletions` borne séparément les propositions, les observations et les reprises.
 

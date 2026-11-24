@@ -110,7 +110,7 @@ if susp != nil {
 
 `Loop` 和 `SubscriptionLoop` 的所有访问都必须串行化，包括 `Ready`、`Pending` 和 `Failed` 等观察方法。回调不得重入会改变状态的方法。构造后的循环不得按值复制。
 
-`NewLoop` 和 `NewSubscriptionLoop` 要求正容量。`Submit` 与 `SubmitExpr` 只进行本地接纳，`Poll` 才向后端提交。容量不足时不会执行程序前缀。`SubmitSuspension` 仅在成功时转移所有权。`Ready` 区分新工作与延迟重试。每轮先处理整个完成批次，再恢复续体；后继操作在后续轮次提交。本地清理不等于原生资源释放。
+`NewLoop` 和 `NewSubscriptionLoop` 要求正容量。`Submit` 与 `SubmitExpr` 只进行本地接纳，`Poll` 才向后端提交。容量不足时不会执行程序前缀。`SubmitSuspension` 仅在成功时转移所有权。`Ready` 区分新工作与延迟重试。每轮先处理整个完成批次，再恢复续体；后继操作在后续轮次提交。本地清理不等于原生资源释放。详见[执行契约](docs/execution.md)。
 
 纯计算可能立即完成，因此必须检查 `Submit` 或 `SubmitExpr` 返回的 `done` 和结果值。`WithMaxCompletions` 分别限制提交尝试、观察和恢复阶段的数量。
 
