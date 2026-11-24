@@ -121,10 +121,9 @@
 // original suspension unchanged on [code.hybscloud.com/iox.ErrWouldBlock] or
 // ordinary failure.
 //
-// [Loop] stores pending `*kont.Suspension` frontiers produced by
-// [code.hybscloud.com/kont.StepExpr] (or by reifying
-// [code.hybscloud.com/kont.Eff] into Expr form first). This gives the backend
-// one pending suspension per token while that submission remains live.
+// [Loop.Submit] calls [code.hybscloud.com/kont.Step] and [Loop.SubmitExpr]
+// calls [code.hybscloud.com/kont.StepExpr]. Once the backend accepts an
+// operation, its token identifies the pending suspension.
 //
 // [Loop] and [SubscriptionLoop] each have one owner. Serialize all access,
 // including Ready, Pending and Failed. Share the constructed loop by pointer

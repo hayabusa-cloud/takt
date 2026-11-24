@@ -986,3 +986,33 @@ func TestLoopSubmitPureAllocations(t *testing.T) {
 		t.Fatalf("expected 0 allocations, got %f", allocs)
 	}
 }
+
+func TestLoopSubmitEffectAllocations(t *testing.T) {
+	loop := takt.NewLoop[*benchBackend, int](&benchBackend{value: 42}, 1, takt.WithMaxCompletions(1))
+	defer loop.Drain()
+	m := kont.Perform(echoOp{})
+	poll := func() {
+		results, err := loop.Poll()
+		if err != nil || len(results) != 1 || results[0] != 42 {
+			t.Fatalf("Poll() = %v, %v", results, err)
+		}
+	}
+
+	const runs = 200
+	direct := testing.AllocsPerRun(runs, func() {
+		_, susp := kont.Step(m)
+		if err := loop.SubmitSuspension(susp); err != nil {
+			t.Fatal(err)
+		}
+		poll()
+	})
+	submit := testing.AllocsPerRun(runs, func() {
+		if _, done, err := loop.Submit(m); done || err != nil {
+			t.Fatalf("Submit() returned done=%v, err=%v", done, err)
+		}
+		poll()
+	})
+	if submit > direct {
+		t.Fatalf("Submit used %g allocations, direct Step and SubmitSuspension used %g", submit, direct)
+	}
+}
