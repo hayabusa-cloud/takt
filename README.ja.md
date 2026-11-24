@@ -86,9 +86,11 @@ if susp != nil {
 // susp == nil のときだけ result は最終値です。それ以外は susp を保持し、次に進める前に err を処理します。
 ```
 
+保留中の操作に必要な許可が取り消される可能性がある場合は、現在のコンテキストで `cove.CheckSuspension` を呼びます。条件を満たさなければ元のサスペンションを保持します。条件を満たせばビューを `AdvanceSuspension` に渡し、呼び出しが終わるまで許可が有効であることを保証します。`iox.ErrWouldBlock` が返ったら、次の関連イベントで許可を再確認します。[書き込み許可を確認する例](write_session_example_test.go)
+
 ### エラー処理
 
-ディスパッチャ操作をエラーエフェクトと合成できます。`Throw` は計算を即座に短絡し、保留中のサスペンションを破棄します。
+`Throw` のエラー型が対象の型と一致すると、`AdvanceError` は保留中のサスペンションを破棄し、`Left(e)` を返します。
 
 ```go
 either := takt.ExecError[string](d, computation)
@@ -101,6 +103,8 @@ if susp != nil {
 }
 // susp == nil のときだけ either は最終値です。WouldBlock や基盤エラー時もサスペンションを保持します。
 ```
+
+`cove.SuspensionView[C, kont.Either[E, A]]` のサスペンションが保留中で条件を満たしていれば、`either, view.Suspension, err = takt.AdvanceError(d, view.Suspension)` で進めます。`view.Suspension == nil` になると `either` が最終結果となり、`view.Ctx` は引き続き参照できます。
 
 ### イベントループ
 

@@ -86,9 +86,11 @@ if susp != nil {
 // result is final only when susp == nil. Otherwise retain susp and handle err before the next advance.
 ```
 
+If permission for a pending operation can be revoked, call `cove.CheckSuspension` with current context. If the check fails, keep the original suspension. If it succeeds, pass the view to `AdvanceSuspension` and keep permission valid through the call. After `iox.ErrWouldBlock`, recheck on the next relevant event. [Guarded write example](write_session_example_test.go)
+
 ### Error Handling
 
-Compose dispatcher operations with error effects. `Throw` short-circuits the computation eagerly and discards the pending suspension.
+On a matching `Throw`, `AdvanceError` discards the pending suspension and returns `Left(e)`.
 
 ```go
 either := takt.ExecError[string](d, computation)
@@ -101,6 +103,8 @@ if susp != nil {
 }
 // either is final only when susp == nil. Retain the suspension on WouldBlock or infrastructure failure.
 ```
+
+For a checked, pending `cove.SuspensionView[C, kont.Either[E, A]]`, use `either, view.Suspension, err = takt.AdvanceError(d, view.Suspension)`. When `view.Suspension == nil`, `either` is final and `view.Ctx` is still available.
 
 ### Event Loop
 

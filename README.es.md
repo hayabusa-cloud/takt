@@ -86,9 +86,11 @@ if susp != nil {
 // result solo es final cuando susp == nil. En otro caso, conserve susp y gestione err antes de avanzar.
 ```
 
+Si el permiso de una operación pendiente puede revocarse, llame a `cove.CheckSuspension` con el contexto actual. Si la comprobación falla, conserve la suspensión original. Si se cumple la condición, pase la vista a `AdvanceSuspension` y asegúrese de que el permiso siga vigente durante la llamada. Tras `iox.ErrWouldBlock`, vuelva a comprobarlo cuando llegue el siguiente evento pertinente. [Ejemplo de escritura con permiso](write_session_example_test.go)
+
 ### Manejo de errores
 
-Componga operaciones del dispatcher con efectos de error. `Throw` cortocircuita la computación de forma inmediata y descarta la suspensión pendiente.
+Cuando el tipo de error de `Throw` coincide con el esperado, `AdvanceError` descarta la suspensión pendiente y devuelve `Left(e)`.
 
 ```go
 either := takt.ExecError[string](d, computation)
@@ -101,6 +103,8 @@ if susp != nil {
 }
 // either solo es final cuando susp == nil. Conserve la suspensión ante WouldBlock o fallo de infraestructura.
 ```
+
+Si la suspensión de una vista `cove.SuspensionView[C, kont.Either[E, A]]` está pendiente y se cumple la condición, use `either, view.Suspension, err = takt.AdvanceError(d, view.Suspension)`. Cuando `view.Suspension == nil`, `either` contiene el resultado final y `view.Ctx` sigue disponible.
 
 ### Bucle de eventos
 

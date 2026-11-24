@@ -86,9 +86,11 @@ if susp != nil {
 // 只有 susp == nil 时 result 才是最终值。否则保留 susp，并在下一次推进前处理 err。
 ```
 
+如果待执行操作所需的权限可能被撤销，请用当前上下文调用 `cove.CheckSuspension`。检查未通过时，保留原来的挂起对象。检查通过时，将视图传给 `AdvanceSuspension`，并确保权限在整个调用期间有效。遇到 `iox.ErrWouldBlock` 后，在下一个相关事件到来时重新检查权限。[写入前检查权限的示例](write_session_example_test.go)
+
 ### 错误处理
 
-可以将调度器操作与错误效果组合使用。`Throw` 会立即短路当前计算，并丢弃挂起中的暂停。
+如果 `Throw` 的错误类型与预期类型匹配，`AdvanceError` 会丢弃当前的挂起对象并返回 `Left(e)`。
 
 ```go
 either := takt.ExecError[string](d, computation)
@@ -101,6 +103,8 @@ if susp != nil {
 }
 // 只有 susp == nil 时 either 才是最终值。WouldBlock 或基础设施故障时应保留挂起。
 ```
+
+如果 `cove.SuspensionView[C, kont.Either[E, A]]` 中的操作仍处于挂起状态且已通过检查，可用 `either, view.Suspension, err = takt.AdvanceError(d, view.Suspension)` 推进。当 `view.Suspension == nil` 时，`either` 是最终结果，`view.Ctx` 仍然可用。
 
 ### 事件循环
 

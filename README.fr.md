@@ -86,9 +86,11 @@ if susp != nil {
 // result n'est final que si susp == nil. Sinon, conservez susp et traitez err avant la prochaine étape.
 ```
 
+Si l’autorisation d’une opération en attente peut être révoquée, appelez `cove.CheckSuspension` avec le contexte courant. En cas de refus, conservez la suspension d’origine. Si la condition est satisfaite, passez la vue à `AdvanceSuspension` et assurez-vous que l’autorisation reste valable pendant l’appel. Après `iox.ErrWouldBlock`, vérifiez-la à nouveau au prochain événement pertinent. [Exemple d’écriture sous condition](write_session_example_test.go)
+
 ### Gestion des erreurs
 
-Composez les opérations du dispatcher avec des effets d'erreur. `Throw` court-circuite immédiatement le calcul et abandonne la suspension en attente.
+Lorsque le type d’erreur de `Throw` correspond au type attendu, `AdvanceError` abandonne la suspension en attente et renvoie `Left(e)`.
 
 ```go
 either := takt.ExecError[string](d, computation)
@@ -101,6 +103,8 @@ if susp != nil {
 }
 // either n'est final que si susp == nil. Conservez la suspension en cas de WouldBlock ou d'échec d'infrastructure.
 ```
+
+Si la suspension d’une vue `cove.SuspensionView[C, kont.Either[E, A]]` est en attente et que la condition est satisfaite, utilisez `either, view.Suspension, err = takt.AdvanceError(d, view.Suspension)`. Lorsque `view.Suspension == nil`, `either` contient le résultat final et `view.Ctx` reste disponible.
 
 ### Boucle d'événements
 
