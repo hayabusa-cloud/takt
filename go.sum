@@ -1,12 +1,12 @@
 code.hybscloud.com/cove v0.2.0 h1:G9oTwINI46bZQA5/XlnF6f/9F6g98drn/Jj7AX1lo1s=
 code.hybscloud.com/cove v0.2.0/go.mod h1:FI1xnNocBWytB8BCW2SAYQ1Wre0GDUg87yXFS3EqkC4=
-code.hybscloud.com/iobuf v0.3.3 h1:yUrh+C7UIZidP21bfh1hFCY+oVoWj0OJoKDhIOlRJGk=
-code.hybscloud.com/iobuf v0.3.3/go.mod h1:C1ItcRUC2JBkrLnnjlDbYzZzCPPO50BHPmeRmca69VQ=
+code.hybscloud.com/iobuf v0.3.4 h1:VDypX23tyuJ1TB9hb4oAjopbdFvLiRJFnSdfv4o5l58=
+code.hybscloud.com/iobuf v0.3.4/go.mod h1:coRxBk3wqYPwx0RbTCiXoOxhnCaeyfHnOgnAA3X7r70=
 code.hybscloud.com/iox v0.4.0 h1:zjsaraUGcFIZABu+R9y+HQ14E5LEs8UgXxfIVop4rM0=
 code.hybscloud.com/iox v0.4.0/go.mod h1:BN4d0Yl28PSroggkCQIz88gq9ssWkQjtfTqPyT5spXA=
 code.hybscloud.com/kont v0.2.0 h1:HyU8WR7VxZ6QPk52pbvRg6eqrC/PJfGUHdsXlqq9Y+4=
 code.hybscloud.com/kont v0.2.0/go.mod h1:zb6ImF1JVe0X3yBT/aiso1hcdmkrrDGZMoYTzxdCBRc=
-code.hybscloud.com/spin v0.1.6 h1:r8C+yyzriTVrktdgQcSGJKZ8qJ+eORkVDxba95/cBIU=
-code.hybscloud.com/spin v0.1.6/go.mod h1:BSOZ7kI43eIPohSVPQXZRf/KJYtRW3gJx82CwyLM64g=
+code.hybscloud.com/spin v0.1.7 h1:36CbvFcq8AFvZCHmKMwZ+C0BlfKOg5L1VrLfw6wCJso=
+code.hybscloud.com/spin v0.1.7/go.mod h1:Otqw4Th7BxHGXkd03o2TGKAz1AfFtlqUR3V++UhmeSQ=
 code.hybscloud.com/tempo v0.1.1 h1:3MniXRvmtTiybbb9x9ivW/n81tOJGAsmr0NGz8mD+9o=
 code.hybscloud.com/tempo v0.1.1/go.mod h1:i9lNKbIm1ZN8HCTjI6GnYaEwVxkeivYFQCz0Fhxqmdk=
