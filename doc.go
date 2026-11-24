@@ -69,7 +69,10 @@
 //
 // [SubscriptionLoop] is the abstract stream counterpart to [Loop]. It uses a
 // [RouteID] made from a [Token] and generation, returns opaque [Subscription]
-// handles, and polls [StreamCompletion] values. [StreamCompletion.More] is
+// handles, and polls [StreamCompletion] values. [NewSubscriptionLoop] requires
+// a positive route capacity. When all slots are in use, [SubscriptionLoop.Subscribe]
+// returns [code.hybscloud.com/iox.ErrWouldBlock] before calling the backend.
+// [StreamCompletion.More] is
 // route-liveness evidence: when it is true, [SubscriptionLoop.Poll] emits a
 // non-final [StreamEvent] and keeps the route live; when it is false, Poll emits
 // a final event and retires the route. [StreamCompletion.HasValue] and
@@ -119,18 +122,19 @@
 // [code.hybscloud.com/kont.Eff] into Expr form first). This gives the backend
 // one pending suspension per token while that submission remains live.
 //
-// [Loop] instances are single-owner runners: callers must serialize all access,
-// including SubmitSuspension and the Ready/Pending/Failed observations. A Loop
-// must not be copied after construction or reentered by a state-changing callback. The
-// provisioned token index uses fixed bucket chains. Admission reserves before
+// [Loop] and [SubscriptionLoop] each have one owner. Serialize all access,
+// including Ready, Pending and Failed. Share the constructed loop by pointer
+// and call state-changing methods only after the current callback returns.
+// The provisioned token index uses fixed bucket chains. Admission reserves before
 // program evaluation; backend refusal retains the reached suspension. Poll
 // accounts the full batch before resuming. Successors enter later offer rounds.
 // [Loop.Ready] distinguishes fresh work from deferred retries. Native custody
 // remains with the backend binding even after local disposal.
 //
-// [Loop.Poll] results are borrowed until the next Poll, Run or Drain. Copy
-// values that must survive that boundary. The loop clears expired references;
-// this does not dispose native resources. [Loop.Run]'s collector is caller-owned.
+// [Loop.Poll] results are borrowed until the next Poll, Run or Drain;
+// [SubscriptionLoop.Poll] events until the next Poll or Drain. Copy any values
+// that must survive that boundary. The runners clear expired references; this
+// does not dispose native resources. [Loop.Run]'s collector is caller-owned.
 //
 // # Execution styles
 //

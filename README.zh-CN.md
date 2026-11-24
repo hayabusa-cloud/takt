@@ -31,7 +31,7 @@
 go get code.hybscloud.com/takt
 ```
 
-需要 Go 1.26 及以上版本。
+需要 Go 1.27 及以上版本。
 
 ## 结果分类
 
@@ -104,9 +104,9 @@ if susp != nil {
 
 ### 事件循环
 
-`Loop` 的所有访问都必须串行化，包括 `Ready`、`Pending` 和 `Failed` 等观察方法。回调不得重入会改变状态的方法。构造后的循环不得按值复制。
+`Loop` 和 `SubscriptionLoop` 的所有访问都必须串行化，包括 `Ready`、`Pending` 和 `Failed` 等观察方法。回调不得重入会改变状态的方法。构造后的循环不得按值复制。
 
-`NewLoop` 要求正容量。`Submit` 与 `SubmitExpr` 只进行本地接纳，`Poll` 才向后端提交。容量不足时不会执行程序前缀。`SubmitSuspension` 仅在成功时转移所有权。`Ready` 区分新工作与延迟重试。每轮先处理整个完成批次，再恢复续体；后继操作在后续轮次提交。本地清理不等于原生资源释放。
+`NewLoop` 和 `NewSubscriptionLoop` 要求正容量。`Submit` 与 `SubmitExpr` 只进行本地接纳，`Poll` 才向后端提交。容量不足时不会执行程序前缀。`SubmitSuspension` 仅在成功时转移所有权。`Ready` 区分新工作与延迟重试。每轮先处理整个完成批次，再恢复续体；后继操作在后续轮次提交。本地清理不等于原生资源释放。
 
 纯计算可能立即完成，因此必须检查 `Submit` 或 `SubmitExpr` 返回的 `done` 和结果值。`WithMaxCompletions` 分别限制提交尝试、观察和恢复阶段的数量。
 
@@ -120,7 +120,7 @@ if susp != nil {
 
 带有 `iox.ErrWouldBlock` 的完成事件会将同一挂起延后到下一轮，前提是旧提交已结束，且没有回复或隐藏的部分进展。完成级 `iox.ErrMore` 会记录 `ErrUnsupportedMultishot`：对应交互仍然存活，需要订阅所有者。循环先处理整个批次，再恢复回复。故障前有效且稳定的回复仍可完成；其后继和其余挂起按绑定的放弃契约处理。`Poll` 先返回已完成的前缀结果，随后调用再报告保存的错误；`Run` 同时返回收集的结果和错误。
 
-`Loop.Poll` 的结果切片借用至下一次 `Poll`、`Run` 或 `Drain`。需要保留时应先复制。借用到期会清除运行器中的引用。清除引用不等于释放资源：原生请求、描述符和缓冲区借用仍由各自所有者负责。即使计算完成或循环失败，也必须调用 `Loop.Drain` 归还完成缓冲区。
+`Loop.Poll` 的结果切片借用至下一次 `Poll`、`Run` 或 `Drain`；流事件借用至下一次 `Poll` 或 `Drain`。需要保留时应先复制。借用到期会清除运行器中的引用，包括事件缓冲区未再使用的尾部。清除引用不等于释放资源：原生请求、描述符和缓冲区借用仍由各自所有者负责。即使计算完成或循环失败，也必须调用 `Loop.Drain` 归还完成缓冲区。
 
 `Loop.Failed()` 报告已记录的致命错误（或 `nil`）。`Loop.Drain()` 会强制循环进入已废弃状态，恰好一次地丢弃所有挂起，仅在尚未设置致命错误时记录 `ErrDisposed`；该方法幂等，并保留任何既有的致命错误。
 
@@ -145,7 +145,7 @@ if done {
 
 ### 流/订阅运行器
 
-`SubscriptionLoop` 是面向按路由索引的流观察的同级运行器。`SubscriptionBackend` 使用 `Subscribe` 启动一个操作，轮询 `StreamCompletion` 值，并接收针对存活路由的 `Cancel` 请求。`RouteID` 将 `Token` 与 generation 组合起来，因此 token 在最终化后复用时不会别名到更早的存活路由。
+`SubscriptionLoop` 是面向按路由索引的流观察的同级运行器。`SubscriptionBackend` 使用 `Subscribe` 启动一个操作，轮询 `StreamCompletion` 值，并接收针对存活路由的 `Cancel` 请求。所有路由槽位都已占用时，`Subscribe` 会在调用后端前返回 `iox.ErrWouldBlock`。每个 `Subscription` 只能用于创建它的循环。只要旧句柄或旧完成通知仍有可能到达该循环，后端复用 `Token` 时就必须更新 `RouteID` 的世代号。
 
 `StreamCompletion.More` 表示同一路由在该观察之后仍然存活。`HasValue` 和 `EventErr` 描述该边界上的载荷证据，并且独立于 `More`：一个完成事件可以报告值且还有后续、没有值但还有后续，或者在路由仍然存活时报告载荷错误。`More == false` 的完成事件会发出最终 `StreamEvent` 并退休该路由。
 
@@ -169,15 +169,20 @@ func (b *myStreamBackend) Cancel(id takt.RouteID) error {
 }
 
 stream := takt.NewSubscriptionLoop[*myStreamBackend, int](
-	backend,
+	backend, 128,
 	takt.WithMaxStreamCompletions(64),
 )
+defer stream.Drain()
 
 sub, err := stream.Subscribe(op)
+if err != nil {
+	return err
+}
 events, err := stream.Poll()
-_ = sub
-_ = events
-_ = err
+if err != nil {
+	return err
+}
+fmt.Println(sub.ID(), events)
 ```
 
 ### 完成缓冲区内存
@@ -269,16 +274,16 @@ defer boundedLoop.Drain()
 - `RouteID.Token() Token`: token 组成部分
 - `RouteID.Generation() uint64`: generation 组成部分
 - `RouteID.IsZero() bool`: 保留的无效路由测试
-- `Subscription[A]`: 不透明的存活流句柄
+- `Subscription[A]`: 不透明的流路由身份
 - `Subscription[A].ID() RouteID`: 该句柄携带的路由身份
-- `Subscription[A].IsZero() bool`: 零值、非存活句柄测试
+- `Subscription[A].IsZero() bool`: 零值句柄测试；不查询路由是否存活
 - `StreamCompletion[A]`: `{ID, Value, HasValue, EventErr, More}`
 - `StreamCompletion[A].RouteOutcome() iox.Outcome`: 投影到 `iox` 结果词汇
 - `StreamEvent[A]`: `{Subscription, Value, HasValue, Final, EventErr}`
 - `SubscriptionBackend[B, A]`: 抽象流后端接口（`Subscribe`, `Poll`, `Cancel`）
 - `SubscriptionOption`: `NewSubscriptionLoop` 的函数式选项
 - `WithMaxStreamCompletions(n)`: 限制每次轮询的流完成事件缓冲区
-- `NewSubscriptionLoop[B, A](b B, opts ...SubscriptionOption) *SubscriptionLoop[B, A]`: 创建流运行器
+- `NewSubscriptionLoop[B, A](b B, capacity int, opts ...SubscriptionOption) *SubscriptionLoop[B, A]`: 创建流运行器
 - `(*SubscriptionLoop[B, A]).Subscribe(op kont.Operation) (Subscription[A], error)`: 启动产生路由的操作
 - `(*SubscriptionLoop[B, A]).Poll() ([]StreamEvent[A], error)`: 轮询按路由索引的事件
 - `(*SubscriptionLoop[B, A]).Cancel(sub Subscription[A]) error`: 请求取消路由

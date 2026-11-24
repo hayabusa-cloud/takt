@@ -39,9 +39,9 @@ func (id RouteID) IsZero() bool {
 	return id == RouteID{}
 }
 
-// Subscription is an opaque handle for one abstract stream route.
-// It carries route identity only; payload delivery and finalization are
-// observed through [SubscriptionLoop.Poll].
+// Subscription identifies one stream route in the loop that returned it.
+// Pass it only to that loop. [SubscriptionLoop.Poll] reports payloads and
+// terminal events.
 type Subscription[A any] struct {
 	id RouteID
 }
@@ -51,7 +51,9 @@ func (s Subscription[A]) ID() RouteID {
 	return s.id
 }
 
-// IsZero reports whether s is the zero, non-live subscription handle.
+// IsZero reports whether s is the zero subscription handle.
+// It does not query route liveness: a nonzero handle keeps its identity after
+// a terminal event, Drain or loop failure retires the route.
 func (s Subscription[A]) IsZero() bool {
 	return s.id.IsZero()
 }
@@ -96,11 +98,17 @@ type StreamEvent[A any] struct {
 }
 
 // SubscriptionBackend is the abstract backend contract for route-indexed
-// stream/subscription execution.
+// stream/subscription execution. The binding retains native requests, backing
+// storage and undelivered resources until their own release conditions hold,
+// including after local Drain or failure. Ignoring a stale event or clearing
+// its Go value does not close a descriptor or return a buffer loan.
 type SubscriptionBackend[B SubscriptionBackend[B, A], A any] interface {
 	// Subscribe starts op as a route-producing operation and returns its route
 	// identity. Returned routes must be unique among routes still live in the
-	// [SubscriptionLoop], and the zero [RouteID] is invalid.
+	// [SubscriptionLoop], and the zero [RouteID] is invalid. An error establishes
+	// that no route was accepted. When reusing a token, use a fresh generation
+	// while a previous handle or completion can still reach the loop. Each
+	// completion must carry the generation of its originating submission.
 	Subscribe(op kont.Operation) (RouteID, error)
 
 	// Poll writes ready stream completions into completions. Poll-level errors
@@ -108,7 +116,9 @@ type SubscriptionBackend[B SubscriptionBackend[B, A], A any] interface {
 	// are reported in [StreamCompletion.EventErr]. A backend must not return
 	// n > 0 and err != nil together; [SubscriptionLoop] handles poll errors
 	// separately from route completions. A poll-level [iox.ErrWouldBlock] means
-	// the stream loop is idle.
+	// the stream loop is idle. It returns 0 <= n <= len(completions) and initializes
+	// every entry in completions[:n]. Deliver a valid prefix with nil before
+	// reporting a subsequent service failure.
 	Poll(completions []StreamCompletion[A]) (int, error)
 
 	// Cancel requests cancellation of the live route. A successful Cancel moves

@@ -31,7 +31,7 @@ proactor モデルでは、I/O 操作はカーネルに送信され、その完�
 go get code.hybscloud.com/takt
 ```
 
-Go 1.26 以降が必要です。
+Go 1.27 以降が必要です。
 
 ## アウトカム分類
 
@@ -104,9 +104,9 @@ if susp != nil {
 
 ### イベントループ
 
-`Loop` へのすべてのアクセスを直列化してください。`Ready`、`Pending`、`Failed` も対象です。コールバックから状態を変更するメソッドへ再入してはいけません。構築後のループを値コピーしてはいけません。
+`Loop` と `SubscriptionLoop` へのすべてのアクセスを直列化してください。`Ready`、`Pending`、`Failed` も対象です。コールバックから状態を変更するメソッドへ再入してはいけません。構築後のループを値コピーしてはいけません。
 
-`NewLoop` には正の容量を指定します。`Submit` と `SubmitExpr` はローカルで処理を受け入れ、`Poll` がバックエンドへ投入します。容量不足による拒否ではプログラムの先頭部分も実行しません。`SubmitSuspension` は成功時だけ所有権を移します。`Ready` は新しい処理と延期された再試行を区別します。バッチ全体の処理後に継続を再開し、後続の投入は次の巡回で行います。ローカルな破棄はネイティブ資源の解放を意味しません。
+`NewLoop` と `NewSubscriptionLoop` には正の容量を指定します。`Submit` と `SubmitExpr` はローカルで処理を受け入れ、`Poll` がバックエンドへ投入します。容量不足による拒否ではプログラムの先頭部分も実行しません。`SubmitSuspension` は成功時だけ所有権を移します。`Ready` は新しい処理と延期された再試行を区別します。バッチ全体の処理後に継続を再開し、後続の投入は次の巡回で行います。ローカルな破棄はネイティブ資源の解放を意味しません。
 
 純粋な計算は即座に完了する場合があります。`Submit` や `SubmitExpr` の `done` と結果を確認してください。`WithMaxCompletions` は送信試行、観測、再開の各段階を個別に制限します。
 
@@ -120,7 +120,7 @@ if susp != nil {
 
 `iox.ErrWouldBlock` を伴う完了は、同じサスペンションを次のラウンドへ延期します。旧リクエストが応答や隠れた部分進行を残さず終了していることが前提です。完了レベルの `iox.ErrMore` は `ErrUnsupportedMultishot` を記録します。対応する処理はまだ生存しており、購読の所有者が必要です。ループはバッチ全体を処理してから再開します。障害前の安定した応答は完了できますが、その後続と残りのサスペンションはバインディングの放棄契約に従って破棄されます。`Poll` は完了した前半の結果を先に返し、保存したエラーを後の呼び出しで返します。`Run` は収集した結果とエラーを同時に返します。
 
-`Loop.Poll` の結果は次の `Poll`、`Run`、`Drain` までの借用です。保持する値は先にコピーしてください。借用終了時にはランナー内の参照を消去します。参照の消去はリソース解放ではありません。ネイティブ要求、記述子、バッファの借用にはそれぞれの所有者が残ります。完了後や障害後も `Loop.Drain` を呼び、完了スラブを返却してください。
+`Loop.Poll` の結果は次の `Poll`、`Run`、`Drain` まで、ストリームイベントは次の `Poll`、`Drain` までの借用です。保持する値は先にコピーしてください。借用終了時には、使われなくなったバッファ末尾を含めランナー内の参照を消去します。参照の消去はリソース解放ではありません。ネイティブ要求、記述子、バッファの借用にはそれぞれの所有者が残ります。完了後や障害後も `Loop.Drain` を呼び、完了スラブを返却してください。
 
 `Loop.Failed()` は記録された致命的エラー（または `nil`）を返します。`Loop.Drain()` はループを廃棄状態へ強制し、保留中のサスペンションをそれぞれ一度だけ破棄し、致命的エラーが未設定の場合に限って `ErrDisposed` を記録します。冪等であり、既存の致命的エラーは保持されます。
 
@@ -145,7 +145,7 @@ if done {
 
 ### ストリーム / サブスクリプションランナー
 
-`SubscriptionLoop` は、ルートでインデックスされたストリーム観測のための同格ランナーです。`SubscriptionBackend` は `Subscribe` で操作を開始し、`StreamCompletion` 値をポーリングし、生存中ルートに対する `Cancel` 要求を受け付けます。`RouteID` は `Token` と generation を組み合わせるため、最終化後に `Token` を再利用しても以前の生存中ルートと混同されません。
+`SubscriptionLoop` は、ルートでインデックスされたストリーム観測のための同格ランナーです。`SubscriptionBackend` は `Subscribe` で操作を開始し、`StreamCompletion` 値をポーリングし、生存中ルートに対する `Cancel` 要求を受け付けます。すべてのルート枠が使用中なら、`Subscribe` はバックエンドを呼ぶ前に `iox.ErrWouldBlock` を返します。`Subscription` は発行元のループで使用します。古いハンドルや完了通知がそのループに届く可能性がある間は、バックエンドが `Token` を再利用する際に `RouteID` の世代を更新する必要があります。
 
 `StreamCompletion.More` は、その観測後も同じルートが生存していることを意味します。`HasValue` と `EventErr` はその境界におけるペイロード証拠を記述し、`More` とは独立しています。つまり完了は、値と後続あり、値なしで後続あり、またはルートが生存したままのペイロードエラーを表せます。`More == false` の完了は final `StreamEvent` を発行し、そのルートを退役させます。
 
@@ -169,15 +169,20 @@ func (b *myStreamBackend) Cancel(id takt.RouteID) error {
 }
 
 stream := takt.NewSubscriptionLoop[*myStreamBackend, int](
-	backend,
+	backend, 128,
 	takt.WithMaxStreamCompletions(64),
 )
+defer stream.Drain()
 
 sub, err := stream.Subscribe(op)
+if err != nil {
+	return err
+}
 events, err := stream.Poll()
-_ = sub
-_ = events
-_ = err
+if err != nil {
+	return err
+}
+fmt.Println(sub.ID(), events)
 ```
 
 ### 完了バッファのメモリ
@@ -269,16 +274,16 @@ defer boundedLoop.Drain()
 - `RouteID.Token() Token`: `Token` 成分
 - `RouteID.Generation() uint64`: generation 成分
 - `RouteID.IsZero() bool`: 予約済み無効ルートの判定
-- `Subscription[A]`: 不透明な生存中ストリームハンドル
+- `Subscription[A]`: 不透明なストリームルートの識別情報
 - `Subscription[A].ID() RouteID`: ハンドルが保持するルート識別情報
-- `Subscription[A].IsZero() bool`: ゼロ値で非生存のハンドルの判定
+- `Subscription[A].IsZero() bool`: ゼロ値ハンドルの判定。ルートの生存状態は照会しない
 - `StreamCompletion[A]`: `{ID, Value, HasValue, EventErr, More}`
 - `StreamCompletion[A].RouteOutcome() iox.Outcome`: `iox` アウトカム語彙への射影
 - `StreamEvent[A]`: `{Subscription, Value, HasValue, Final, EventErr}`
 - `SubscriptionBackend[B, A]`: 抽象ストリームバックエンドインターフェース（`Subscribe`, `Poll`, `Cancel`）
 - `SubscriptionOption`: `NewSubscriptionLoop` 用の関数型オプション
 - `WithMaxStreamCompletions(n)`: 1 回のポーリングに使うストリーム完了バッファを制限する
-- `NewSubscriptionLoop[B, A](b B, opts ...SubscriptionOption) *SubscriptionLoop[B, A]`: ストリームランナーを作成する
+- `NewSubscriptionLoop[B, A](b B, capacity int, opts ...SubscriptionOption) *SubscriptionLoop[B, A]`: ストリームランナーを作成する
 - `(*SubscriptionLoop[B, A]).Subscribe(op kont.Operation) (Subscription[A], error)`: ルート生成操作を開始する
 - `(*SubscriptionLoop[B, A]).Poll() ([]StreamEvent[A], error)`: ルートでインデックスされたイベントをポーリングする
 - `(*SubscriptionLoop[B, A]).Cancel(sub Subscription[A]) error`: ルートキャンセルを要求する

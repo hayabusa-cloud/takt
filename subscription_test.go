@@ -73,7 +73,7 @@ func TestRouteIDAccessors(t *testing.T) {
 
 func TestSubscriptionLoopLiveValueBoundaryKeepsRoute(t *testing.T) {
 	b := &streamBackend{}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(4))
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, takt.WithMaxStreamCompletions(4))
 	sub, err := l.Subscribe(echoOp{})
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
@@ -112,7 +112,7 @@ func TestSubscriptionLoopLiveValueBoundaryKeepsRoute(t *testing.T) {
 
 func TestSubscriptionLoopLiveEmptyBoundaryKeepsRoute(t *testing.T) {
 	b := &streamBackend{}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(4))
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, takt.WithMaxStreamCompletions(4))
 	sub, err := l.Subscribe(echoOp{})
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
@@ -143,7 +143,7 @@ func TestSubscriptionLoopLiveEmptyBoundaryKeepsRoute(t *testing.T) {
 func TestSubscriptionLoopLivePayloadErrorKeepsRoute(t *testing.T) {
 	payloadErr := errors.New("payload error")
 	b := &streamBackend{}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(4))
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, takt.WithMaxStreamCompletions(4))
 	sub, err := l.Subscribe(echoOp{})
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
@@ -191,7 +191,7 @@ func TestSubscriptionLoopTerminalSuccessRetiresRoute(t *testing.T) {
 	id1 := takt.NewRouteID(9, 1)
 	id2 := takt.NewRouteID(9, 2)
 	b := &streamBackend{ids: []takt.RouteID{id1, id2}}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(4))
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, takt.WithMaxStreamCompletions(4))
 	sub, err := l.Subscribe(echoOp{})
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
@@ -228,7 +228,7 @@ func TestSubscriptionLoopTerminalSuccessRetiresRoute(t *testing.T) {
 func TestSubscriptionLoopTerminalFailureRetiresRoute(t *testing.T) {
 	payloadErr := errors.New("terminal payload error")
 	b := &streamBackend{}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(4))
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, takt.WithMaxStreamCompletions(4))
 	sub, err := l.Subscribe(echoOp{})
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
@@ -263,7 +263,7 @@ func TestSubscriptionLoopTerminalFailureRetiresRoute(t *testing.T) {
 func TestSubscriptionLoopSubscribeFailureDoesNotPoisonLoop(t *testing.T) {
 	subscribeErr := errors.New("subscribe failed")
 	b := &streamBackend{subscribeErr: subscribeErr}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(4))
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, takt.WithMaxStreamCompletions(4))
 
 	sub, err := l.Subscribe(echoOp{})
 	if err != subscribeErr {
@@ -294,7 +294,7 @@ func TestSubscriptionLoopSubscribeFailureDoesNotPoisonLoop(t *testing.T) {
 
 func TestSubscriptionLoopPollWouldBlockIsIdle(t *testing.T) {
 	b := &streamBackend{pollErr: iox.ErrWouldBlock}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(4))
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, takt.WithMaxStreamCompletions(4))
 	if _, err := l.Subscribe(echoOp{}); err != nil {
 		t.Fatalf("Subscribe error: %v", err)
 	}
@@ -313,7 +313,7 @@ func TestSubscriptionLoopPollWouldBlockIsIdle(t *testing.T) {
 
 func TestSubscriptionLoopZeroRouteCompletionIgnored(t *testing.T) {
 	b := &streamBackend{}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(4))
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, takt.WithMaxStreamCompletions(4))
 	if _, err := l.Subscribe(echoOp{}); err != nil {
 		t.Fatalf("Subscribe error: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestSubscriptionLoopZeroRouteCompletionIgnored(t *testing.T) {
 
 func TestSubscriptionLoopCancelPreservesRouteUntilTerminal(t *testing.T) {
 	b := &streamBackend{}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(4))
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, takt.WithMaxStreamCompletions(4))
 	sub, err := l.Subscribe(echoOp{})
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
@@ -371,7 +371,7 @@ func TestSubscriptionLoopCancelPreservesRouteUntilTerminal(t *testing.T) {
 
 func TestSubscriptionLoopCancelZeroSubscription(t *testing.T) {
 	b := &streamBackend{}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(4))
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, takt.WithMaxStreamCompletions(4))
 
 	err := l.Cancel(takt.Subscription[int]{})
 	if !errors.Is(err, takt.ErrUnknownSubscription) {
@@ -388,7 +388,7 @@ func TestSubscriptionLoopCancelZeroSubscription(t *testing.T) {
 func TestSubscriptionLoopCancelFailurePreservesActiveRoute(t *testing.T) {
 	cancelErr := errors.New("cancel failed")
 	b := &streamBackend{cancelErr: cancelErr}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(4))
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, takt.WithMaxStreamCompletions(4))
 	sub, err := l.Subscribe(echoOp{})
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
@@ -403,7 +403,7 @@ func TestSubscriptionLoopCancelFailurePreservesActiveRoute(t *testing.T) {
 
 func TestSubscriptionLoopDrainCancelsActiveRoutesOnce(t *testing.T) {
 	b := &streamBackend{}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(4))
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 2, takt.WithMaxStreamCompletions(4))
 	sub1, err := l.Subscribe(echoOp{})
 	if err != nil {
 		t.Fatalf("Subscribe 1 error: %v", err)
@@ -438,7 +438,7 @@ func TestSubscriptionLoopDrainCancelsActiveRoutesOnce(t *testing.T) {
 func TestSubscriptionLoopRejectsLiveRouteReuse(t *testing.T) {
 	id := takt.NewRouteID(1, 1)
 	b := &streamBackend{ids: []takt.RouteID{id, id}}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(4))
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 2, takt.WithMaxStreamCompletions(4))
 	if _, err := l.Subscribe(echoOp{}); err != nil {
 		t.Fatalf("first Subscribe error: %v", err)
 	}
@@ -458,7 +458,7 @@ func TestSubscriptionLoopRejectsLiveRouteReuse(t *testing.T) {
 
 func TestSubscriptionLoopRejectsInvalidRouteID(t *testing.T) {
 	b := &streamBackend{ids: []takt.RouteID{{}}}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(4))
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, takt.WithMaxStreamCompletions(4))
 	if _, err := l.Subscribe(echoOp{}); !errors.Is(err, takt.ErrInvalidRouteID) {
 		t.Fatalf("Subscribe=%v want ErrInvalidRouteID", err)
 	}
@@ -467,37 +467,46 @@ func TestSubscriptionLoopRejectsInvalidRouteID(t *testing.T) {
 	}
 }
 
-func TestSubscriptionLoopStaleCompletionIgnored(t *testing.T) {
-	b := &streamBackend{}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(4))
-	sub, err := l.Subscribe(echoOp{})
+func TestSubscriptionLoopTokenReuse(t *testing.T) {
+	first := takt.NewRouteID(7, 1)
+	second := takt.NewRouteID(7, 2)
+	b := &streamBackend{ids: []takt.RouteID{first, second}}
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, takt.WithMaxStreamCompletions(4))
+	defer l.Drain()
+	old, err := l.Subscribe(echoOp{})
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
 	}
-	b.ready = append(b.ready, takt.StreamCompletion[int]{ID: sub.ID()})
+	b.ready = append(b.ready, takt.StreamCompletion[int]{ID: first})
 	if _, err := l.Poll(); err != nil {
 		t.Fatalf("terminal Poll error: %v", err)
 	}
-
-	b.ready = append(b.ready, takt.StreamCompletion[int]{
-		ID:       sub.ID(),
-		Value:    99,
-		HasValue: true,
-		More:     true,
-	})
-	events, err := l.Poll()
+	current, err := l.Subscribe(echoOp{})
 	if err != nil {
-		t.Fatalf("stale Poll error: %v", err)
+		t.Fatal(err)
 	}
-	if events != nil {
-		t.Fatalf("stale events=%#v want nil", events)
+	if err := l.Cancel(old); err != takt.ErrUnknownSubscription || len(b.cancelled) != 0 {
+		t.Fatalf("Cancel(old) = %v, backend cancellations = %v", err, b.cancelled)
+	}
+	b.ready = []takt.StreamCompletion[int]{
+		{ID: first, More: true},
+		{ID: first},
+		{ID: second, Value: 42, HasValue: true, More: true},
+	}
+	events, err := l.Poll()
+	want := takt.StreamEvent[int]{Subscription: current, Value: 42, HasValue: true}
+	if err != nil || len(events) != 1 || events[0] != want || l.Pending() != 1 {
+		t.Fatalf("Poll = %v, %v, pending = %d", events, err, l.Pending())
+	}
+	if err := l.Cancel(current); err != nil || len(b.cancelled) != 1 || b.cancelled[0] != second {
+		t.Fatalf("Cancel(current) = %v, backend cancellations = %v", err, b.cancelled)
 	}
 }
 
 func TestSubscriptionLoopPollFailurePoisonsAndCancels(t *testing.T) {
 	pollErr := errors.New("poll failed")
 	b := &streamBackend{pollErr: pollErr}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(4))
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, takt.WithMaxStreamCompletions(4))
 	sub, err := l.Subscribe(echoOp{})
 	if err != nil {
 		t.Fatalf("Subscribe error: %v", err)
@@ -522,7 +531,7 @@ func TestSubscriptionLoopPollFailurePoisonsAndCancels(t *testing.T) {
 
 func TestSubscriptionLoopFatalMethodsReturnStoredError(t *testing.T) {
 	b := &streamBackend{}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(4))
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, takt.WithMaxStreamCompletions(4))
 	l.Drain()
 	if _, err := l.Subscribe(echoOp{}); !errors.Is(err, takt.ErrDisposed) {
 		t.Fatalf("Subscribe after Drain=%v want ErrDisposed", err)
@@ -537,7 +546,7 @@ func TestSubscriptionLoopFatalMethodsReturnStoredError(t *testing.T) {
 
 func TestSubscriptionLoopRoutesMaxStreamCompletions(t *testing.T) {
 	b := &streamBackend{}
-	l := takt.NewSubscriptionLoop[*streamBackend, int](b, takt.WithMaxStreamCompletions(3))
+	l := takt.NewSubscriptionLoop[*streamBackend, int](b, 1, takt.WithMaxStreamCompletions(3))
 	if _, err := l.Poll(); err != nil {
 		t.Fatalf("Poll error: %v", err)
 	}

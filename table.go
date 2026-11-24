@@ -41,14 +41,18 @@ func newTable[K comparable, V any](capacity int) table[K, V] {
 
 func (t *table[K, V]) reserve() int {
 	i := t.free
-	if i == -1 {
-		return -1
+	if i != -1 {
+		t.takeFree(i)
 	}
+	return i
+}
+
+// takeFree claims the current head of the free list.
+func (t *table[K, V]) takeFree(i int) {
 	t.free = t.entries[i].next
 	t.entries[i].next = -1
 	t.entries[i].used = true
 	t.count++
-	return i
 }
 
 // release requires removal from the identity index first.

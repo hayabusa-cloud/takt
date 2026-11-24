@@ -31,7 +31,7 @@ For stream or multishot-style integrations, `SubscriptionLoop` provides a separa
 go get code.hybscloud.com/takt
 ```
 
-Requires Go 1.26 or later.
+Requires Go 1.27 or later.
 
 ## Outcome Classification
 
@@ -106,19 +106,19 @@ if susp != nil {
 
 A `Loop` drives computations through a `Backend`. It submits operations, polls for completions, correlates them by `Token`, and resumes suspended continuations. `NewLoop` accepts functional `Option`s. `WithMaxCompletions(n)` panics when `n <= 0` with `takt: WithMaxCompletions requires n > 0`; `WithMemory(nil)` panics with `takt: WithMemory requires a non-nil CompletionMemory`.
 
-`NewLoop` requires positive capacity. `Loop.Submit` and `SubmitExpr` reserve before evaluating; their success admits work locally, and `Poll` offers it to the backend. A pure program can finish immediately: check the returned `done` flag and value. Local capacity refusal executes no prefix; `SubmitSuspension` transfers ownership only on success. `Ready` distinguishes fresh work from deferred retries. `WithMaxCompletions` bounds offers, observations, and resumptions in separate phases.
+`NewLoop` and `NewSubscriptionLoop` require positive capacity. `Loop.Submit` and `SubmitExpr` reserve before evaluating; their success admits work locally, and `Poll` offers it to the backend. A pure program can finish immediately: check the returned `done` flag and value. Local capacity refusal executes no prefix; `SubmitSuspension` transfers ownership only on success. `Ready` distinguishes fresh work from deferred retries. `WithMaxCompletions` bounds offers, observations, and resumptions in separate phases.
 
 `Backend.Poll([]Completion) (int, error)` reports both the number of ready completions and any infrastructure poll failure; a backend must not return ready completions together with a non-nil poll-level error. `Loop` treats `iox.ErrWouldBlock` returned by `Poll` as an idle tick rather than a terminal error.
 
 On a successful or ordinary-failure completion, `Loop` resumes with `Completion.ResumeValue()`, including any operation error in that reply. Ordinary backends populate `Value`; fixed non-pointer payloads can use `NewInlineCompletion` and a `CompletionDecoder` to delay boxing until resumption. Reading `Value` directly does not decode inline payloads; decoding may allocate.
 
-`Loop` requires serialized access, including observation methods such as `Ready`, `Pending`, and `Failed`. Callbacks must not reenter state-changing methods. Do not copy a constructed loop.
+`Loop` and `SubscriptionLoop` require serialized access, including observation methods such as `Ready`, `Pending`, and `Failed`. Callbacks must not reenter state-changing methods. Do not copy a constructed loop.
 
 `Backend.Submit` must return a token that is unique among all submissions still live in the loop. Tokens are correlation keys, not sequence numbers; a concrete backend may use a kernel `user_data` value directly. If a backend reuses a live token, the loop records `ErrLiveTokenReuse`, drains every pending suspension exactly once, and every subsequent `SubmitExpr` / `Submit` / `Poll` / `Run` call returns that fatal error.
 
 A completion carrying `iox.ErrWouldBlock` defers the same suspension to a later round, provided the old submission retired with no reply or hidden partial progress. Completion-level `iox.ErrMore` records `ErrUnsupportedMultishot`: that backend interaction remains live and needs a subscription owner. The loop accounts the whole batch before resuming. Earlier stable replies may still complete; successors and remaining suspensions are discarded under the binding's abort contract. `Poll` returns completed prefix results first and reports the stored error on a later call; `Run` returns collected results together with the error.
 
-`Loop.Poll` results are borrowed until the next `Poll`, `Run`, or `Drain`. Copy values before retaining them. Expiration clears the runner's references. Clearing is not resource disposal: native requests, descriptors, and buffer loans retain their own owners. Call `Loop.Drain` even after completion or failure to return its completion slab.
+`Loop.Poll` results are borrowed until the next `Poll`, `Run`, or `Drain`; stream events until the next `Poll` or `Drain`. Copy values before retaining them. Expiration clears the runner's references, including obsolete event-buffer tails. Clearing is not resource disposal: native requests, descriptors, and buffer loans retain their own owners. Call `Loop.Drain` even after completion or failure to return its completion slab.
 
 `Loop.Failed()` reports the recorded fatal error (or `nil`). `Loop.Drain()` forces the loop into a disposed state, discards every pending suspension exactly once, and records `ErrDisposed` only if no fatal was previously set; it is idempotent and preserves the original fatal error when one already exists.
 
@@ -143,7 +143,7 @@ if done {
 
 ### Stream / Subscription Runner
 
-`SubscriptionLoop` is the sibling runner for route-indexed stream observations. A `SubscriptionBackend` starts an operation with `Subscribe`, polls `StreamCompletion` values, and accepts `Cancel` requests for live routes. `RouteID` pairs a `Token` with a generation so token reuse after finalization does not alias an older live route.
+`SubscriptionLoop` is the sibling runner for route-indexed stream observations. A `SubscriptionBackend` starts an operation with `Subscribe`, polls `StreamCompletion` values, and accepts `Cancel` requests for live routes. `Subscribe` returns `iox.ErrWouldBlock` before calling the backend when all route slots are in use. A `Subscription` belongs to the loop that issued it. When reusing a `Token`, the backend must use a new generation in the `RouteID` while an old handle or completion can still reach the loop.
 
 `StreamCompletion.More` means the same route remains live after the observation. `HasValue` and `EventErr` describe payload evidence at that boundary and are independent of `More`: a completion can report a value and more to come, no value and more to come, or a payload error while the route remains live. A completion with `More == false` emits a final `StreamEvent` and retires the route.
 
@@ -167,15 +167,20 @@ func (b *myStreamBackend) Cancel(id takt.RouteID) error {
 }
 
 stream := takt.NewSubscriptionLoop[*myStreamBackend, int](
-	backend,
+	backend, 128,
 	takt.WithMaxStreamCompletions(64),
 )
+defer stream.Drain()
 
 sub, err := stream.Subscribe(op)
+if err != nil {
+	return err
+}
 events, err := stream.Poll()
-_ = sub
-_ = events
-_ = err
+if err != nil {
+	return err
+}
+fmt.Println(sub.ID(), events)
 ```
 
 ### Completion Memory
@@ -267,16 +272,16 @@ defer boundedLoop.Drain()
 - `RouteID.Token() Token`: token component
 - `RouteID.Generation() uint64`: generation component
 - `RouteID.IsZero() bool`: reserved invalid-route test
-- `Subscription[A]`: opaque live stream handle
+- `Subscription[A]`: opaque stream route identity
 - `Subscription[A].ID() RouteID`: route identity carried by the handle
-- `Subscription[A].IsZero() bool`: zero, non-live handle test
+- `Subscription[A].IsZero() bool`: zero-handle test; does not query route liveness
 - `StreamCompletion[A]`: `{ID, Value, HasValue, EventErr, More}`
 - `StreamCompletion[A].RouteOutcome() iox.Outcome`: projection to `iox` outcome vocabulary
 - `StreamEvent[A]`: `{Subscription, Value, HasValue, Final, EventErr}`
 - `SubscriptionBackend[B, A]`: abstract stream backend interface (`Subscribe`, `Poll`, `Cancel`)
 - `SubscriptionOption`: functional options for `NewSubscriptionLoop`
 - `WithMaxStreamCompletions(n)`: cap the per-poll stream completion buffer
-- `NewSubscriptionLoop[B, A](b B, opts ...SubscriptionOption) *SubscriptionLoop[B, A]`: create a stream runner
+- `NewSubscriptionLoop[B, A](b B, capacity int, opts ...SubscriptionOption) *SubscriptionLoop[B, A]`: create a stream runner
 - `(*SubscriptionLoop[B, A]).Subscribe(op kont.Operation) (Subscription[A], error)`: start a route-producing operation
 - `(*SubscriptionLoop[B, A]).Poll() ([]StreamEvent[A], error)`: poll route-indexed events
 - `(*SubscriptionLoop[B, A]).Cancel(sub Subscription[A]) error`: request route cancellation
