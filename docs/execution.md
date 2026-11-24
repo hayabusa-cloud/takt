@@ -49,9 +49,11 @@ records `ErrUnsupportedMultishot`. A terminal WouldBlock completion may rearm
 only when the old submission has retired with no reply or hidden partial
 progress. Both refusal and rearm preserve the suspension as deferred work.
 `Pending` counts all locally owned lineages.
-`Ready` reports fresh requests or eligible retained replies. External drivers
-must combine it with native readiness, deadlines and cleanup obligations before
-parking. `Run` retries with `iox.Backoff` and resets it when a suspension resumes.
+`Ready` reports fresh requests or eligible retained replies while the loop is
+healthy. A stored failure makes it false even while earlier replies resume.
+External drivers must combine it with native readiness, deadlines and cleanup
+obligations before parking. `Run` retries with `iox.Backoff` and resets it when
+a suspension resumes.
 
 The [write-session example](../write_session_example_test.go) combines writability
 and peer permission with `tempo.Both`. For events on the matching route,
@@ -107,4 +109,4 @@ storage can therefore exceed the pool capacity.
 `urex.LoopBackend` adapts the native backend for `takt.Loop`. The caller retains
 ownership of the backend and its ring. A ring binding retains backing storage,
 request identities and cleanup capacity until both target and control requests
-can retire, even if `Pending() == 0`.
+can retire, even if `Pending() == 0`. See [proof scope](../proofs/README.md).

@@ -1,0 +1,11 @@
+name = "takt"
+defaultTargets = ["Takt", "Audit"]
+
+[leanOptions]
+warningAsError = true
+
+[[lean_lib]]
+name = "Takt"
+
+[[lean_lib]]
+name = "Audit"

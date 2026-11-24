@@ -7,6 +7,29 @@ on:
     branches: [main]
 
 jobs:
+  proofs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up pinned proof tools
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 https://github.com/leanprover/elan/releases/download/v4.2.4/elan-x86_64-unknown-linux-gnu.tar.gz -o "$RUNNER_TEMP/elan.tar.gz"
+          echo "42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63  $RUNNER_TEMP/elan.tar.gz" | sha256sum -c -
+          mkdir "$RUNNER_TEMP/elan-installer"
+          tar -xzf "$RUNNER_TEMP/elan.tar.gz" -C "$RUNNER_TEMP/elan-installer"
+          "$RUNNER_TEMP/elan-installer/elan-init" -y --no-modify-path --default-toolchain none
+          "$HOME/.elan/bin/elan" toolchain install "$(cat proofs/lean-toolchain)"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Record environment
+        run: |
+          uname -sr
+          elan --version
+          sh proofs/run.sh lean --version
+          sh proofs/run.sh lake --version
+      - name: Check proofs and transitive axioms
+        run: sh proofs/run.sh
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -6,6 +6,7 @@ package takt_test
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"code.hybscloud.com/iox"
@@ -167,11 +168,14 @@ func TestSuccessorUsesSameSlotInLaterTick(t *testing.T) {
 
 func TestBatchAccountedBeforePrefixResumes(t *testing.T) {
 	b := &boundedBackend{moreAt: 2}
-	l := takt.NewLoop[*boundedBackend, int](b, 3, takt.WithMaxCompletions(3))
+	l := takt.NewLoop[*boundedBackend, int](b, 4, takt.WithMaxCompletions(3))
 	defer l.Drain()
 	first := kont.ExprBind(kont.ExprPerform(numberedOp{1}), func(v int) kont.Expr[int] {
 		if !errors.Is(l.Failed(), takt.ErrUnsupportedMultishot) {
 			t.Error("prefix resumed before later batch fault was accounted")
+		}
+		if l.Ready() {
+			t.Error("faulted loop reported the unoffered slot as ready")
 		}
 		return kont.ExprReturn(v)
 	})
@@ -179,12 +183,42 @@ func TestBatchAccountedBeforePrefixResumes(t *testing.T) {
 	l.SubmitExpr(kont.ExprPerform(numberedOp{2}))
 	lateRan := false
 	l.SubmitExpr(kont.ExprBind(kont.ExprPerform(numberedOp{3}), func(v int) kont.Expr[int] { lateRan = true; return kont.ExprReturn(v) }))
+	if _, _, err := l.SubmitExpr(kont.ExprPerform(numberedOp{4})); err != nil {
+		t.Fatal(err)
+	}
 	values, err := l.Poll()
 	if err != nil || len(values) != 1 || values[0] != 1 || lateRan || l.Pending() != 0 {
 		t.Fatalf("fatal prefix: %v %v late=%v", values, err, lateRan)
 	}
 	if _, err = l.Poll(); err != takt.ErrUnsupportedMultishot {
 		t.Fatal(err)
+	}
+}
+
+func TestReadyDuringReplyDelivery(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		moreAt int
+		want   []bool
+	}{
+		{"healthy", 0, []bool{true, true, false}},
+		{"fault on third completion", 3, []bool{false, false}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			b := &boundedBackend{moreAt: tt.moreAt}
+			l := takt.NewLoop[*boundedBackend, bool](b, 3, takt.WithMaxCompletions(3))
+			defer l.Drain()
+			for id := range 3 {
+				m := kont.ExprMap(kont.ExprPerform(numberedOp{id}), func(int) bool { return l.Ready() })
+				if _, _, err := l.SubmitExpr(m); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := l.Poll()
+			if err != nil || !slices.Equal(got, tt.want) {
+				t.Fatalf("Ready during reply delivery = %v, err = %v, want %v", got, err, tt.want)
+			}
+		})
 	}
 }
 

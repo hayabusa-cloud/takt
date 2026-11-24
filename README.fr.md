@@ -110,7 +110,7 @@ Si la suspension d’une vue `cove.SuspensionView[C, kont.Either[E, A]]` est en 
 
 Un `Loop` pilote les calculs au travers d'un `Backend`. Il soumet les opérations, sonde les complétions, les corrèle par `Token` et reprend les continuations suspendues. `NewLoop` accepte des `Option` fonctionnelles. `WithMaxCompletions(n)` panique si `n <= 0` avec `takt: WithMaxCompletions requires n > 0` ; `WithMemory(nil)` panique avec `takt: WithMemory requires a non-nil CompletionMemory`.
 
-`NewLoop` et `NewSubscriptionLoop` exigent une capacité positive. `Submit` et `SubmitExpr` admettent le travail localement ; `Poll` le soumet au backend. Un refus de capacité n'exécute aucun préfixe du programme. `SubmitSuspension` transfère la suspension uniquement en cas de succès. `Ready` distingue le travail nouveau des tentatives différées. Chaque cycle traite le lot avant de reprendre les continuations ; les successeurs attendent un cycle ultérieur. La vidange locale ne libère pas les ressources natives. Voir le [contrat d'exécution](docs/execution.md).
+`NewLoop` et `NewSubscriptionLoop` exigent une capacité positive. `Submit` et `SubmitExpr` admettent le travail localement ; `Poll` le soumet au backend. Un refus de capacité n'exécute aucun préfixe du programme. `SubmitSuspension` transfère la suspension uniquement en cas de succès. `Ready` distingue le travail nouveau des tentatives différées. Chaque cycle traite le lot avant de reprendre les continuations ; les successeurs attendent un cycle ultérieur. La vidange locale ne libère pas les ressources natives. Voir le [contrat d'exécution](docs/execution.md) et la [portée des preuves](proofs/README.md).
 
 Un programme pur peut terminer immédiatement : vérifiez `done` et la valeur renvoyée par `Submit` ou `SubmitExpr`. `WithMaxCompletions` borne séparément les propositions, les observations et les reprises.
 
@@ -307,7 +307,7 @@ defer boundedLoop.Drain()
 
 Utilisez un `Backend` avec `Loop`, ou un `Dispatcher` avec `Exec` et `Advance`. Ce sont des chemins distincts : Loop n'appelle pas automatiquement Dispatcher. `ExecError` et `AdvanceError` interprètent explicitement les effets d'erreur d'application. Un Loop brut exige un backend/interpréteur qui traite toutes les opérations admises, effets d'erreur compris. Les [exemples exécutables](example_test.go) montrent les suspensions suivantes, les résultats immédiats et l'admission différée au backend.
 
-Le guide de [performance](docs/performance.md) couvre la localité, l'ordonnancement, l'attente adaptative, la répartition typée et les mesures reproductibles.
+Le guide de [vérification](docs/verification.md) décrit les contrôles et la portée des preuves. Le guide de [performance](docs/performance.md) couvre la localité, l'ordonnancement, l'attente adaptative, la répartition typée et les mesures reproductibles.
 
 ## Références
 

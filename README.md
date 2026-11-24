@@ -110,7 +110,7 @@ For a checked, pending `cove.SuspensionView[C, kont.Either[E, A]]`, use `either,
 
 A `Loop` drives computations through a `Backend`. It submits operations, polls for completions, correlates them by `Token`, and resumes suspended continuations. `NewLoop` accepts functional `Option`s. `WithMaxCompletions(n)` panics when `n <= 0` with `takt: WithMaxCompletions requires n > 0`; `WithMemory(nil)` panics with `takt: WithMemory requires a non-nil CompletionMemory`.
 
-`NewLoop` and `NewSubscriptionLoop` require positive capacity. `Loop.Submit` and `SubmitExpr` reserve before evaluating; their success admits work locally, and `Poll` offers it to the backend. A pure program can finish immediately: check the returned `done` flag and value. Local capacity refusal executes no prefix; `SubmitSuspension` transfers ownership only on success. `Ready` distinguishes fresh work from deferred retries. `WithMaxCompletions` bounds offers, observations, and resumptions in separate phases. See the [execution contract](docs/execution.md).
+`NewLoop` and `NewSubscriptionLoop` require positive capacity. `Loop.Submit` and `SubmitExpr` reserve before evaluating; their success admits work locally, and `Poll` offers it to the backend. A pure program can finish immediately: check the returned `done` flag and value. Local capacity refusal executes no prefix; `SubmitSuspension` transfers ownership only on success. `Ready` distinguishes fresh work from deferred retries. `WithMaxCompletions` bounds offers, observations, and resumptions in separate phases. See the [execution contract](docs/execution.md) and [proof scope](proofs/README.md).
 
 `Backend.Poll([]Completion) (int, error)` reports both the number of ready completions and any infrastructure poll failure; a backend must not return ready completions together with a non-nil poll-level error. `Loop` treats `iox.ErrWouldBlock` returned by `Poll` as an idle tick rather than a terminal error.
 
@@ -305,7 +305,7 @@ defer boundedLoop.Drain()
 
 Use a `Backend` with `Loop`, or a `Dispatcher` with `Exec` and `Advance`. They are separate execution paths; a Loop does not invoke a Dispatcher automatically. `ExecError` and `AdvanceError` interpret application error effects explicitly. A raw Loop needs a backend/interpreter that handles every admitted operation, including any error effects. [Runnable examples](example_test.go) demonstrate successor handling, immediate results, and deferred backend admission.
 
-The [performance guide](docs/performance.md) covers locality, scheduling, backoff, typed dispatch and repeatable benchmarks.
+[Verification](docs/verification.md) includes the installed-tool check command and proof scope. The [performance guide](docs/performance.md) covers locality, scheduling, backoff, typed dispatch and repeatable benchmarks.
 
 ## References
 

@@ -110,7 +110,7 @@ if susp != nil {
 
 `Loop` と `SubscriptionLoop` へのすべてのアクセスを直列化してください。`Ready`、`Pending`、`Failed` も対象です。コールバックから状態を変更するメソッドへ再入してはいけません。構築後のループを値コピーしてはいけません。
 
-`NewLoop` と `NewSubscriptionLoop` には正の容量を指定します。`Submit` と `SubmitExpr` はローカルで処理を受け入れ、`Poll` がバックエンドへ投入します。容量不足による拒否ではプログラムの先頭部分も実行しません。`SubmitSuspension` は成功時だけ所有権を移します。`Ready` は新しい処理と延期された再試行を区別します。バッチ全体の処理後に継続を再開し、後続の投入は次の巡回で行います。ローカルな破棄はネイティブ資源の解放を意味しません。[実行契約](docs/execution.md)を参照してください。
+`NewLoop` と `NewSubscriptionLoop` には正の容量を指定します。`Submit` と `SubmitExpr` はローカルで処理を受け入れ、`Poll` がバックエンドへ投入します。容量不足による拒否ではプログラムの先頭部分も実行しません。`SubmitSuspension` は成功時だけ所有権を移します。`Ready` は新しい処理と延期された再試行を区別します。バッチ全体の処理後に継続を再開し、後続の投入は次の巡回で行います。ローカルな破棄はネイティブ資源の解放を意味しません。[実行契約](docs/execution.md)と[証明の範囲](proofs/README.md)を参照してください。
 
 純粋な計算は即座に完了する場合があります。`Submit` や `SubmitExpr` の `done` と結果を確認してください。`WithMaxCompletions` は送信試行、観測、再開の各段階を個別に制限します。
 
@@ -307,7 +307,7 @@ defer boundedLoop.Drain()
 
 `Loop` では `Backend`、`Exec` と `Advance` では `Dispatcher` を使います。これらは別の実行経路であり、Loop が自動的に Dispatcher を呼ぶわけではありません。`ExecError` と `AdvanceError` はアプリケーションのエラー効果を明示的に解釈します。素の Loop では、エラー効果を含むすべての受け入れ操作を扱えるバックエンドまたはインタプリタが必要です。[実行可能な例](example_test.go)では、後続サスペンション、即時の結果、バックエンドへの遅延送信を示します。
 
-[性能ガイド](docs/performance.md)では局所性、スケジューリング、適応的バックオフ、型付きディスパッチ、再現可能な測定方法を説明しています。
+[検証ガイド](docs/verification.md)には検証コマンドと証明の適用範囲を記載しています。[性能ガイド](docs/performance.md)では局所性、スケジューリング、適応的バックオフ、型付きディスパッチ、再現可能な測定方法を説明しています。
 
 ## 参考文献
 

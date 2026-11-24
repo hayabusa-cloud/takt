@@ -110,7 +110,7 @@ Si la suspensión de una vista `cove.SuspensionView[C, kont.Either[E, A]]` está
 
 Un `Loop` conduce computaciones a través de un `Backend`. Envía operaciones, sondea finalizaciones, las correlaciona por `Token` y reanuda las continuaciones suspendidas. `NewLoop` acepta `Option` funcionales. `WithMaxCompletions(n)` entra en pánico si `n <= 0` con `takt: WithMaxCompletions requires n > 0`; `WithMemory(nil)` entra en pánico con `takt: WithMemory requires a non-nil CompletionMemory`.
 
-`NewLoop` y `NewSubscriptionLoop` requieren una capacidad positiva. `Submit` y `SubmitExpr` admiten trabajo localmente; `Poll` lo envía al backend. El rechazo por capacidad no ejecuta el prefijo del programa. `SubmitSuspension` transfiere la suspensión solo si tiene éxito. `Ready` distingue trabajo nuevo de reintentos diferidos. Cada ciclo procesa el lote antes de reanudar; los sucesores se envían en ciclos posteriores. El vaciado local no libera recursos nativos. Véase el [contrato de ejecución](docs/execution.md).
+`NewLoop` y `NewSubscriptionLoop` requieren una capacidad positiva. `Submit` y `SubmitExpr` admiten trabajo localmente; `Poll` lo envía al backend. El rechazo por capacidad no ejecuta el prefijo del programa. `SubmitSuspension` transfiere la suspensión solo si tiene éxito. `Ready` distingue trabajo nuevo de reintentos diferidos. Cada ciclo procesa el lote antes de reanudar; los sucesores se envían en ciclos posteriores. El vaciado local no libera recursos nativos. Véanse el [contrato de ejecución](docs/execution.md) y el [alcance de las pruebas formales](proofs/README.md).
 
 Un programa puro puede terminar de inmediato: compruebe `done` y el valor devuelto por `Submit` o `SubmitExpr`. `WithMaxCompletions` limita por separado ofertas, observaciones y reanudaciones.
 
@@ -307,7 +307,7 @@ defer boundedLoop.Drain()
 
 Use un `Backend` con `Loop`, o un `Dispatcher` con `Exec` y `Advance`. Son rutas separadas: Loop no llama automáticamente a Dispatcher. `ExecError` y `AdvanceError` interpretan explícitamente los efectos de error de aplicación. Un Loop sin esas capas necesita un backend/intérprete que maneje todas las operaciones admitidas, incluidos los efectos de error. Los [ejemplos ejecutables](example_test.go) muestran sucesoras, resultados inmediatos y admisión diferida al backend.
 
-La guía de [rendimiento](docs/performance.md) explica la localidad, la planificación, la espera adaptativa, el despacho tipado y las mediciones repetibles.
+La guía de [verificación](docs/verification.md) incluye las comprobaciones y el alcance de las pruebas formales. La guía de [rendimiento](docs/performance.md) explica la localidad, la planificación, la espera adaptativa, el despacho tipado y las mediciones repetibles.
 
 ## Referencias
 

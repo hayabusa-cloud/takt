@@ -132,9 +132,10 @@ func (l *Loop[B, R]) enqueue(i int, susp *kont.Suspension[R], deferred bool) {
 	}
 }
 
-// Ready reports fresh admissions or retained replies. Deferred retries remain
-// Pending without forcing Ready. It does not promise backend acceptance.
-// External drivers supply readiness wakes or retry deadlines before parking.
+// Ready reports fresh admissions or retained replies while the loop is healthy.
+// A stored failure makes it false even while an earlier reply resumes.
+// Deferred retries alone keep the loop pending. The backend decides which offers
+// it accepts. External drivers supply readiness wakes or retry deadlines before parking.
 func (l *Loop[B, R]) Ready() bool {
 	return l.fatal == nil && (l.fresh > 0 || l.replies.size > 0)
 }

@@ -110,7 +110,7 @@ if susp != nil {
 
 `Loop` 和 `SubscriptionLoop` 的所有访问都必须串行化，包括 `Ready`、`Pending` 和 `Failed` 等观察方法。回调不得重入会改变状态的方法。构造后的循环不得按值复制。
 
-`NewLoop` 和 `NewSubscriptionLoop` 要求正容量。`Submit` 与 `SubmitExpr` 只进行本地接纳，`Poll` 才向后端提交。容量不足时不会执行程序前缀。`SubmitSuspension` 仅在成功时转移所有权。`Ready` 区分新工作与延迟重试。每轮先处理整个完成批次，再恢复续体；后继操作在后续轮次提交。本地清理不等于原生资源释放。详见[执行契约](docs/execution.md)。
+`NewLoop` 和 `NewSubscriptionLoop` 要求正容量。`Submit` 与 `SubmitExpr` 只进行本地接纳，`Poll` 才向后端提交。容量不足时不会执行程序前缀。`SubmitSuspension` 仅在成功时转移所有权。`Ready` 区分新工作与延迟重试。每轮先处理整个完成批次，再恢复续体；后继操作在后续轮次提交。本地清理不等于原生资源释放。详见[执行契约](docs/execution.md)和[证明范围](proofs/README.md)。
 
 纯计算可能立即完成，因此必须检查 `Submit` 或 `SubmitExpr` 返回的 `done` 和结果值。`WithMaxCompletions` 分别限制提交尝试、观察和恢复阶段的数量。
 
@@ -307,7 +307,7 @@ defer boundedLoop.Drain()
 
 `Loop` 使用 `Backend`，`Exec` 和 `Advance` 使用 `Dispatcher`。它们是独立执行路径；Loop 不会自动调用 Dispatcher。`ExecError` 和 `AdvanceError` 显式解释应用错误效果。原始 Loop 需要后端或解释器处理所有已接纳的操作，包括错误效果。[可运行示例](example_test.go)展示了后继处理、立即返回结果和延后提交后端。
 
-[性能指南](docs/performance.md)涵盖局部性、调度、自适应退避、类型化分派和可重复的基准测试。
+[验证指南](docs/verification.md)介绍检查命令和证明范围。[性能指南](docs/performance.md)涵盖局部性、调度、自适应退避、类型化分派和可重复的基准测试。
 
 ## 参考文献
 

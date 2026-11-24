@@ -88,3 +88,4 @@ Check generated calls, retained roots and first-use behavior alongside sampled
 costs. The compiler pattern includes the external test package where the
 generic dispatchers are instantiated. For native comparisons, match the
 ownership, cancellation and scheduling conditions in the [execution contract](execution.md).
+See [verification](verification.md) for the allocation and behavior checks.
