@@ -8,3 +8,5 @@ code.hybscloud.com/kont v0.1.8 h1:SKpPhYNIcd7fkT4SDf0NJPheEiM/WJUhkkfTHUqJ3v0=
 code.hybscloud.com/kont v0.1.8/go.mod h1:bSVvA1+WqivYN585w48d+f2q9zkYDJcdHQYywWFL9D4=
 code.hybscloud.com/spin v0.1.6 h1:r8C+yyzriTVrktdgQcSGJKZ8qJ+eORkVDxba95/cBIU=
 code.hybscloud.com/spin v0.1.6/go.mod h1:BSOZ7kI43eIPohSVPQXZRf/KJYtRW3gJx82CwyLM64g=
+code.hybscloud.com/tempo v0.1.1 h1:3MniXRvmtTiybbb9x9ivW/n81tOJGAsmr0NGz8mD+9o=
+code.hybscloud.com/tempo v0.1.1/go.mod h1:i9lNKbIm1ZN8HCTjI6GnYaEwVxkeivYFQCz0Fhxqmdk=

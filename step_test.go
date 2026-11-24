@@ -174,6 +174,72 @@ func TestAdvanceSuspensionWouldBlockReturnsObservedSuspension(t *testing.T) {
 	}
 }
 
+func TestGuardedWriteRetry(t *testing.T) {
+	route := takt.NewRouteID(3, 7)
+	for _, tc := range []struct {
+		name          string
+		first, second writeEvent
+	}{
+		{"writable first", socketWritable, peerGranted},
+		{"permission first", peerGranted, socketWritable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := startWrite(route, "ping", 2)
+			pending := s.pending
+			checkWaiting := func(id takt.RouteID, e writeEvent) {
+				t.Helper()
+				n, done, err := s.onEvent(id, e)
+				if n != 0 || done || err != nil || s.pending != pending || len(s.buffer.data) != 0 {
+					t.Fatalf("event %d: n=%d done=%t err=%v same suspension=%t buffer=%q", e, n, done, err, s.pending == pending, s.buffer.data)
+				}
+			}
+			checkWaiting(route, tc.first)
+			checkWaiting(takt.NewRouteID(3, 6), tc.second)
+			checkWaiting(takt.NewRouteID(4, 7), tc.second)
+
+			n, done, err := s.onEvent(route, tc.second)
+			if n != 0 || done || !iox.IsWouldBlock(err) || s.pending != pending || string(s.buffer.data) != "pi" {
+				t.Fatalf("partial write: n=%d done=%t err=%v same suspension=%t buffer=%q", n, done, err, s.pending == pending, s.buffer.data)
+			}
+			s.buffer.data = s.buffer.data[:0]
+			checkWaiting(route, peerGranted) // The buffer still needs a writable wake.
+			checkWaiting(route, peerRevoked)
+			checkWaiting(route, socketWritable) // Writability alone cannot restore permission.
+			checkWaiting(takt.NewRouteID(3, 6), peerGranted)
+
+			n, done, err = s.onEvent(route, peerGranted)
+			if n != 4 || !done || err != nil || s.pending != nil || string(s.buffer.data) != "ng" {
+				t.Fatalf("retry: n=%d done=%t err=%v buffer=%q", n, done, err, s.buffer.data)
+			}
+		})
+	}
+}
+
+func TestGuardedWriteReportsCompletionOnce(t *testing.T) {
+	route := takt.NewRouteID(3, 7)
+	for _, message := range []string{"", "ping"} {
+		s := startWrite(route, message, 2)
+		s.onEvent(route, peerGranted)
+		var written []byte
+		var results []int
+		// Two wakes suffice for "ping". A third can arrive after completion.
+		for range 3 {
+			n, done, err := s.onEvent(route, socketWritable)
+			if err != nil && !iox.IsWouldBlock(err) {
+				t.Fatalf("write %q: %v", message, err)
+			}
+			if done {
+				results = append(results, n)
+			}
+			written = append(written, s.buffer.data...)
+			s.buffer.data = s.buffer.data[:0]
+		}
+		if string(written) != message || len(results) != 1 || results[0] != len(message) {
+			t.Errorf("write %q: buffered %q, completions %v, want [%d]", message, written, results, len(message))
+		}
+	}
+}
+
 func TestAdvanceSuspensionWithContextPreservesContextOnErrMore(t *testing.T) {
 	cont := kont.Bind(kont.Perform(echoOp{}), func(v int) kont.Eff[int] {
 		return kont.Bind(kont.Perform(echoOp{}), func(w int) kont.Eff[int] {

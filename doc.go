@@ -102,15 +102,19 @@
 // operations. Results are [code.hybscloud.com/kont.Either]: Right on success,
 // Left on Throw.
 //
-// [code.hybscloud.com/cove.SuspensionView] already satisfies
-// [SuspensionLike] through its `Op` and `Resume` methods, so it can be passed
-// directly to [AdvanceSuspension].
-//
 // # Stepping behavior
 //
 // Each [AdvanceSuspension] call handles exactly one suspended operation. If
 // resuming that operation produces another suspension, the caller receives it
 // back and decides how to continue.
+//
+// A session owner can track readiness and permission with
+// [code.hybscloud.com/tempo.Both] and pass the view from
+// [code.hybscloud.com/cove.CheckSuspension] directly to [AdvanceSuspension].
+// A writable notice permits an attempt. Peer permission must hold through
+// dispatch and resumption. Recheck both before retrying a blocked write.
+// [Loop.Poll] resumes admitted suspensions internally. Use [Loop.SubmitSuspension]
+// when the binding can guarantee any required conditions at delivery.
 //
 // [AdvanceSuspension] resumes on [code.hybscloud.com/iox.ErrMore] using the
 // dispatcher's valid reply while the interaction remains live. It returns the

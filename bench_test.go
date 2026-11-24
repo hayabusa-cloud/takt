@@ -7,6 +7,7 @@ package takt_test
 import (
 	"testing"
 
+	"code.hybscloud.com/iox"
 	"code.hybscloud.com/kont"
 	"code.hybscloud.com/takt"
 )
@@ -40,6 +41,25 @@ func benchCont(val int) kont.Expr[int] {
 			return kont.ExprReturn(v)
 		},
 	)
+}
+
+func BenchmarkGuardedWriteRetry(b *testing.B) {
+	route := takt.NewRouteID(3, 7)
+	s := startWrite(route, "ping", 2)
+	s.onEvent(route, peerGranted)
+	_, _, err := s.onEvent(route, socketWritable) // Fill the buffer and retain the pending write.
+	if !iox.IsWouldBlock(err) {
+		b.Fatalf("first write: %v", err)
+	}
+	pending := s.pending
+	b.ReportAllocs()
+	for b.Loop() {
+		_, _, err = s.onEvent(route, socketWritable)
+	}
+	if !iox.IsWouldBlock(err) || s.pending != pending {
+		b.Fatalf("retry: err=%v same suspension=%t", err, s.pending == pending)
+	}
+	pending.Discard()
 }
 
 func BenchmarkLoopSubmitPoll(b *testing.B) {
