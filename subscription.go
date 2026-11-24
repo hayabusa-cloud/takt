@@ -5,125 +5,19 @@
 package takt
 
 import (
-	"sync/atomic"
-	"unsafe"
+	"math/bits"
 
 	"code.hybscloud.com/iox"
 	"code.hybscloud.com/kont"
-	"code.hybscloud.com/spin"
 )
 
 type routeState struct {
 	canceling bool
 }
 
-const routeShards = 64
-
-type routeShard struct {
-	sl    spin.Lock
-	items map[RouteID]routeState
-	size  atomic.Int32
-	_     [cacheLineBytes - unsafe.Sizeof(spin.Lock{}) - unsafe.Sizeof(map[RouteID]routeState(nil)) - unsafe.Sizeof(atomic.Int32{})]byte
-}
-
-// Compile-time check: routeShard occupies exactly one cache line. The route
-// table mirrors Loop's token table so hot route lookup, insert, and delete
-// traffic stays shard-local.
-var _ [0]byte = [cacheLineBytes - unsafe.Sizeof(routeShard{})]byte{}
-
-type shardedRoutes [routeShards]routeShard
-
-func newShardedRoutes() *shardedRoutes {
-	var routes shardedRoutes
-	for i := range routeShards {
-		routes[i] = routeShard{
-			items: make(map[RouteID]routeState),
-		}
-	}
-	return &routes
-}
-
-func routeShardIndex(id RouteID) int {
-	return int((uint64(id.token) ^ id.generation) & (routeShards - 1))
-}
-
-func (routes *shardedRoutes) store(id RouteID, st routeState) bool {
-	shard := &routes[routeShardIndex(id)]
-	shard.sl.Lock()
-	if _, ok := shard.items[id]; ok {
-		shard.sl.Unlock()
-		return false
-	}
-	shard.size.Add(1)
-	shard.items[id] = st
-	shard.sl.Unlock()
-	return true
-}
-
-func (routes *shardedRoutes) load(id RouteID) (routeState, bool) {
-	shard := &routes[routeShardIndex(id)]
-	shard.sl.Lock()
-	st, ok := shard.items[id]
-	shard.sl.Unlock()
-	return st, ok
-}
-
-func (routes *shardedRoutes) setCanceling(id RouteID) bool {
-	shard := &routes[routeShardIndex(id)]
-	shard.sl.Lock()
-	st, ok := shard.items[id]
-	if ok {
-		st.canceling = true
-		shard.items[id] = st
-	}
-	shard.sl.Unlock()
-	return ok
-}
-
-func (routes *shardedRoutes) delete(id RouteID) {
-	shard := &routes[routeShardIndex(id)]
-	shard.sl.Lock()
-	delete(shard.items, id)
-	shard.sl.Unlock()
-	shard.size.Add(-1)
-}
-
-func (shard *routeShard) claimAny() (RouteID, routeState, bool) {
-	shard.sl.Lock()
-	for id, st := range shard.items {
-		delete(shard.items, id)
-		shard.sl.Unlock()
-		shard.size.Add(-1)
-		return id, st, true
-	}
-	shard.sl.Unlock()
-	return RouteID{}, routeState{}, false
-}
-
-func (routes *shardedRoutes) size() int {
-	var n int
-	for i := range routeShards {
-		n += int(routes[i].size.Load())
-	}
-	return n
-}
-
-func (routes *shardedRoutes) drain(cancel func(RouteID) error) int {
-	drained := 0
-	for i := range routeShards {
-		shard := &routes[i]
-		for {
-			id, st, ok := shard.claimAny()
-			if !ok {
-				break
-			}
-			if !st.canceling {
-				_ = cancel(id)
-			}
-			drained++
-		}
-	}
-	return drained
+// Rotating the generation spreads routes whose token and generation advance together.
+func routeHash(id RouteID) uint64 {
+	return uint64(id.token) ^ bits.RotateLeft64(id.generation, 32)
 }
 
 // SubscriptionLoop drives route-indexed stream completions through a
@@ -136,36 +30,48 @@ func (routes *shardedRoutes) drain(cancel func(RouteID) error) int {
 // retires the route.
 //
 // SubscriptionLoop is not safe for concurrent use. Callers must serialize
-// Subscribe, Poll, Cancel, Drain, Pending, and Failed calls on one loop.
+// all access to one loop; backend callbacks must not reenter state-changing
+// methods. A SubscriptionLoop must not be copied after construction.
 type SubscriptionLoop[B SubscriptionBackend[B, A], A any] struct {
 	backend     B
-	routes      *shardedRoutes
+	routes      table[RouteID, routeState]
 	completions []StreamCompletion[A]
 	events      []StreamEvent[A]
 	fatal       error
 }
 
-// NewSubscriptionLoop creates a route-indexed stream runner over b.
+// NewSubscriptionLoop reserves space for capacity simultaneous routes.
+// Capacity must be positive.
 // Use [WithMaxStreamCompletions] to cap the per-poll completion buffer length;
 // omitted options use [DefaultCompletionBufSize].
-func NewSubscriptionLoop[B SubscriptionBackend[B, A], A any](b B, opts ...SubscriptionOption) *SubscriptionLoop[B, A] {
+func NewSubscriptionLoop[B SubscriptionBackend[B, A], A any](b B, capacity int, opts ...SubscriptionOption) *SubscriptionLoop[B, A] {
+	if capacity <= 0 {
+		panic("takt: capacity must be positive")
+	}
 	cfg := resolveSubscriptionConfig(opts)
 	completions := make([]StreamCompletion[A], cfg.maxCompletions)
 	return &SubscriptionLoop[B, A]{
 		backend:     b,
-		routes:      newShardedRoutes(),
+		routes:      newTable[RouteID, routeState](capacity),
 		completions: completions,
 		events:      make([]StreamEvent[A], 0, len(completions)),
 	}
 }
 
-// Subscribe starts op through the backend and stores the returned route.
+// Subscribe reserves a route record before calling the backend. Local capacity
+// exhaustion returns [iox.ErrWouldBlock] before the backend sees op. Success
+// means the backend accepted the route.
 // It returns [ErrInvalidRouteID] when the backend returns the reserved zero
 // route and [ErrLiveRouteReuse] when the backend aliases a currently live
 // route. Either condition is fatal to the loop.
 func (l *SubscriptionLoop[B, A]) Subscribe(op kont.Operation) (Subscription[A], error) {
 	if l.fatal != nil {
 		return Subscription[A]{}, l.fatal
+	}
+	// The serialized owner keeps this slot available until the offer returns.
+	slot := l.routes.free
+	if slot == -1 {
+		return Subscription[A]{}, iox.ErrWouldBlock
 	}
 	id, err := l.backend.Subscribe(op)
 	if err != nil {
@@ -175,7 +81,9 @@ func (l *SubscriptionLoop[B, A]) Subscribe(op kont.Operation) (Subscription[A], 
 		l.poison(ErrInvalidRouteID)
 		return Subscription[A]{}, ErrInvalidRouteID
 	}
-	if !l.routes.store(id, routeState{}) {
+	l.routes.takeFree(slot)
+	if !l.routes.insert(slot, id, routeHash(id)) {
+		l.routes.release(slot)
 		l.poison(ErrLiveRouteReuse)
 		return Subscription[A]{}, ErrLiveRouteReuse
 	}
@@ -187,15 +95,17 @@ func (l *SubscriptionLoop[B, A]) Subscribe(op kont.Operation) (Subscription[A], 
 // Poll-level [iox.ErrWouldBlock] is treated as an idle tick. The backend poll
 // contract excludes ready completions paired with a non-nil poll error.
 // Unknown-route completions are stale observations and are ignored. The returned
-// slice aliases an internal buffer that is reused on the next Poll call.
+// slice is borrowed until the next Poll or Drain. Copy events that must survive
+// that boundary; the runner clears its expired value and error references.
 func (l *SubscriptionLoop[B, A]) Poll() ([]StreamEvent[A], error) {
+	clear(l.events)
+	l.events = l.events[:0]
 	if l.fatal != nil {
 		return nil, l.fatal
 	}
 	n, err := l.backend.Poll(l.completions)
-	l.events = l.events[:0]
 	if n > 0 {
-		defer clearStreamCompletions(l.completions[:n])
+		defer clear(l.completions[:n])
 	}
 	if err != nil {
 		if iox.IsWouldBlock(err) {
@@ -217,8 +127,16 @@ func (l *SubscriptionLoop[B, A]) handleCompletion(c StreamCompletion[A]) {
 	if c.ID.IsZero() {
 		return
 	}
-	if _, ok := l.routes.load(c.ID); !ok {
-		return
+	if c.More {
+		if l.routes.lookup(c.ID, routeHash(c.ID)) == -1 {
+			return
+		}
+	} else {
+		i := l.routes.remove(c.ID, routeHash(c.ID))
+		if i == -1 {
+			return
+		}
+		l.routes.release(i)
 	}
 	ev := StreamEvent[A]{
 		Subscription: Subscription[A]{id: c.ID},
@@ -228,9 +146,6 @@ func (l *SubscriptionLoop[B, A]) handleCompletion(c StreamCompletion[A]) {
 		EventErr:     c.EventErr,
 	}
 	l.events = append(l.events, ev)
-	if !c.More {
-		l.routes.delete(c.ID)
-	}
 }
 
 // Cancel requests cancellation of sub.
@@ -244,23 +159,23 @@ func (l *SubscriptionLoop[B, A]) Cancel(sub Subscription[A]) error {
 	if sub.IsZero() {
 		return ErrUnknownSubscription
 	}
-	st, ok := l.routes.load(sub.id)
-	if !ok {
+	i := l.routes.lookup(sub.id, routeHash(sub.id))
+	if i == -1 {
 		return ErrUnknownSubscription
 	}
-	if st.canceling {
+	if l.routes.entries[i].value.canceling {
 		return nil
 	}
 	if err := l.backend.Cancel(sub.id); err != nil {
 		return err
 	}
-	l.routes.setCanceling(sub.id)
+	l.routes.entries[i].value.canceling = true
 	return nil
 }
 
 // Pending returns the count of live stream routes.
 func (l *SubscriptionLoop[B, A]) Pending() int {
-	return l.routes.size()
+	return l.routes.count
 }
 
 // Failed returns the loop's terminal fatal error, if any.
@@ -272,15 +187,16 @@ func (l *SubscriptionLoop[B, A]) Failed() error {
 // owned route. Active routes receive one cancel request; routes already in the
 // canceling state are retired without a duplicate cancel request. Drain is
 // idempotent and returns the number of routes retired by this call.
+// The binding's native owner must retain cancellation refusals and dispose late
+// resource-bearing events. Local retirement is not physical settlement.
 func (l *SubscriptionLoop[B, A]) Drain() int {
 	if l.fatal == nil {
 		l.fatal = ErrDisposed
 	}
 	drained := l.drainRoutes()
-	if l.completions != nil {
-		clearStreamCompletions(l.completions)
-		l.completions = nil
-	}
+	clear(l.completions)
+	l.completions = nil
+	clear(l.events)
 	l.events = nil
 	return drained
 }
@@ -293,9 +209,19 @@ func (l *SubscriptionLoop[B, A]) poison(err error) {
 }
 
 func (l *SubscriptionLoop[B, A]) drainRoutes() int {
-	return l.routes.drain(l.backend.Cancel)
-}
-
-func clearStreamCompletions[A any](s []StreamCompletion[A]) {
-	clear(s)
+	n := l.routes.count
+	for i := range l.routes.entries {
+		e := &l.routes.entries[i]
+		if e.used {
+			id, canceling := e.key, e.value.canceling
+			l.routes.release(i)
+			if !canceling {
+				_ = l.backend.Cancel(id)
+			}
+		}
+	}
+	for i := range l.routes.buckets {
+		l.routes.buckets[i] = -1
+	}
+	return n
 }

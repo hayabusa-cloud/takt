@@ -23,6 +23,23 @@ func TestReifyContToExpr(t *testing.T) {
 	}
 }
 
+func TestReifyPendingCopiesShareInvocation(t *testing.T) {
+	expr := takt.Reify(kont.Perform(echoOp{}))
+	alias := expr
+	_, pending := takt.Step(expr)
+	if pending == nil {
+		t.Fatal("first step did not yield the operation")
+	}
+	defer pending.Discard()
+
+	defer func() {
+		if recover() == nil {
+			t.Error("stepping a copy exposed the same operation twice")
+		}
+	}()
+	takt.Step(alias)
+}
+
 func TestReflectExprToCont(t *testing.T) {
 	d := &testDispatcher{value: 42}
 	expr := kont.ExprBind(kont.ExprPerform(echoOp{}), func(n int) kont.Expr[int] {

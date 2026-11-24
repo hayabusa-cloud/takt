@@ -1,0 +1,65 @@
+name: Benchmarks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  benchmarks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GOWORK: 'off'
+      GOTOOLCHAIN: local
+      GOMAXPROCS: '1'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.x'
+
+      - name: Run benchmarks
+        shell: bash
+        run: |
+          {
+            go version
+            go env -json GOOS GOARCH GOFLAGS GOEXPERIMENT
+            uname -srmo
+            lscpu
+            taskset -pc "$$"
+            printf 'revision=%s\nGOMAXPROCS=%s\n' "$GITHUB_SHA" "$GOMAXPROCS"
+            go list -mod=readonly -deps -test -f '{{with .Module}}{{.Path}} {{.Version}}{{end}}' . | sort -u
+          } > "$RUNNER_TEMP/environment.txt"
+          go test -mod=readonly -run '^$' \
+            -bench '^Benchmark(LoopRefusal|LoopBatch|SubscriptionLocality|SubscriptionRetirement|DispatchFamily|DispatchControl|GuardedWriteRetry|AdvanceErrorRefusal)$' \
+            -benchmem -benchtime=200ms -count=10 -timeout=5m . | tee "$RUNNER_TEMP/benchmarks.txt"
+          first_samples=$(awk '/^Benchmark/ && $4 == "ns/op" && !seen[$1]++' "$RUNNER_TEMP/benchmarks.txt")
+          if [[ -z "$first_samples" ]]; then
+            echo 'No benchmark measurements found.' >&2
+            exit 1
+          fi
+          {
+            echo 'First sample for each workload. The artifact contains all ten samples and the runner environment.'
+            echo
+            echo '~~~text'
+            printf '%s\n' "$first_samples"
+            echo '~~~'
+          } | tee "$RUNNER_TEMP/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: takt-benchmarks
+          path: |
+            ${{ runner.temp }}/summary.md
+            ${{ runner.temp }}/benchmarks.txt
+            ${{ runner.temp }}/environment.txt
+          if-no-files-found: error

@@ -7,17 +7,49 @@ on:
     branches: [main]
 
 jobs:
+  proofs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up pinned proof tools
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 https://github.com/leanprover/elan/releases/download/v4.2.4/elan-x86_64-unknown-linux-gnu.tar.gz -o "$RUNNER_TEMP/elan.tar.gz"
+          echo "42b94d4244e8353142c456ec0e4ca6528fd898a6c604d4059f494e706e431f63  $RUNNER_TEMP/elan.tar.gz" | sha256sum -c -
+          mkdir "$RUNNER_TEMP/elan-installer"
+          tar -xzf "$RUNNER_TEMP/elan.tar.gz" -C "$RUNNER_TEMP/elan-installer"
+          "$RUNNER_TEMP/elan-installer/elan-init" -y --no-modify-path --default-toolchain none
+          "$HOME/.elan/bin/elan" toolchain install "$(cat proofs/lean-toolchain)"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Record environment
+        run: |
+          uname -sr
+          elan --version
+          sh proofs/run.sh lean --version
+          sh proofs/run.sh lake --version
+      - name: Check proofs and transitive axioms
+        run: sh proofs/run.sh
+
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
     strategy:
       matrix:
-        go-version: ['1.26', 'stable']
+        go-version: ['1.27.x', 'stable']
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go-version }}
+
+      - name: Record environment
+        run: |
+          go version
+          uname -sr
 
       - name: Format check
         run: |
@@ -25,9 +57,7 @@ jobs:
           test -z "$(gofmt -l .)"
 
       - name: Module tidy check
-        run: |
-          go mod tidy
-          git diff --exit-code go.mod go.sum
+        run: go mod tidy -diff
 
       - name: Vet
         run: go vet ./...
@@ -36,12 +66,12 @@ jobs:
         run: go test -timeout 120s -race -count=1 ./...
 
       - name: Coverage
-        if: matrix.go-version == '1.26'
+        if: matrix.go-version == '1.27.x'
         run: go test -timeout 120s -covermode=atomic -coverprofile=coverage.out -count=1 ./...
 
       - name: Upload coverage
-        uses: codecov/codecov-action@v5
-        if: matrix.go-version == '1.26'
+        uses: codecov/codecov-action@v7
+        if: matrix.go-version == '1.27.x'
         with:
           files: coverage.out
           token: ${{ secrets.CODECOV_TOKEN }}

@@ -69,7 +69,7 @@ func TestPropertyFairnessOrdering(t *testing.T) {
 		count = (count % 500) + 1 // 1 to 500 items
 
 		backend := &propBackend{nextT: 1, shuffle: true}
-		loop := takt.NewLoop[*propBackend, int](backend, takt.WithMaxCompletions(count))
+		loop := takt.NewLoop[*propBackend, int](backend, 1024, takt.WithMaxCompletions(count))
 
 		for range count {
 			loop.SubmitExpr(propCont())
@@ -131,7 +131,7 @@ func TestPropertyExecLoopBisimulation(t *testing.T) {
 		// Mode 3: Loop.Submit + Loop.Run via the immediateBackend.
 		dLoop := &testDispatcher{value: 7}
 		bLoop := &immediateBackend{dispatch: dLoop.Dispatch}
-		l := takt.NewLoop[*immediateBackend, int](bLoop, takt.WithMaxCompletions(depth+4))
+		l := takt.NewLoop[*immediateBackend, int](bLoop, 1024, takt.WithMaxCompletions(depth+4))
 		if _, _, err := l.SubmitExpr(echoChain(depth)); err != nil {
 			return false
 		}
@@ -149,46 +149,19 @@ func TestPropertyExecLoopBisimulation(t *testing.T) {
 }
 
 func TestPropertyFaultTolerance(t *testing.T) {
-	f := func(count int, failIdx int) bool {
-		if count < 0 {
-			count = -count
-		}
-		count = (count % 100) + 2 // 2 to 102 items
-
-		if failIdx < 0 {
-			failIdx = -failIdx
-		}
-		failIdx = failIdx % count
-
-		backend := &propBackend{nextT: 1, shuffle: false}
-		loop := takt.NewLoop[*propBackend, int](backend, takt.WithMaxCompletions(count))
-
-		successCount := 0
-		for i := range count {
-			if i == failIdx {
-				backend.failSubmit = true
-			} else {
-				backend.failSubmit = false
-			}
-			_, _, err := loop.SubmitExpr(propCont())
-			if err == nil {
-				successCount++
+	f := func(size, failure uint8) bool {
+		count := int(size) + 1
+		failAt := int(failure)%count + 1
+		backend := &failSubmitBackend{dispatch: (&testDispatcher{value: 7}).Dispatch, failAt: failAt}
+		l := takt.NewLoop[*failSubmitBackend, int](backend, count, takt.WithMaxCompletions(count))
+		for range count {
+			if _, done, err := l.SubmitExpr(propCont()); err != nil || done {
+				return false
 			}
 		}
-
-		var results []int
-		for len(results) < successCount {
-			res, _ := loop.Poll()
-			results = append(results, res...)
-		}
-
-		if len(results) != successCount {
-			return false
-		}
-
-		return true
+		_, err := l.Poll()
+		return err != nil && l.Failed() == err && l.Pending() == 0 && backend.submits == failAt
 	}
-
 	if err := quick.Check(f, &quick.Config{MaxCount: 100}); err != nil {
 		t.Error(err)
 	}

@@ -13,10 +13,15 @@ import (
 
 // Dispatcher is the non-blocking execution boundary for one suspended
 // operation.
-// Dispatch returns (value, nil) on completion, (value, iox.ErrMore) when
-// progress was made and the operation reports a live frontier,
-// (nil, iox.ErrWouldBlock) when no progress is currently possible, or
-// (nil, error) on infrastructure failure.
+// Dispatch returns a valid reply with nil or [iox.ErrMore]. The latter also
+// reports a live interaction; it does not permit reusing the same continuation.
+// [iox.ErrWouldBlock] and ordinary failures leave the suspension unconsumed;
+// their returned value is not delivered. The dispatcher must retain any partial
+// progress and operands needed to retry that same operation without replay.
+// Ordinary operation errors can be encoded in valid replies; infrastructure
+// failures remain separate. Control classification does not measure progress.
+// Classification follows [iox.Classify], including wrapped errors. An error
+// matching both semantic sentinels is WouldBlock and cannot authorize resumption.
 type Dispatcher[D Dispatcher[D]] interface {
 	Dispatch(op kont.Operation) (kont.Resumed, error)
 }
@@ -75,13 +80,17 @@ func dispatchWait[D Dispatcher[D]](d D, op kont.Operation) kont.Resumed {
 	var bo iox.Backoff
 	for {
 		v, err := d.Dispatch(op)
-		if iox.IsProgress(err) {
+		if err == nil {
 			return v
 		}
-		if !iox.IsWouldBlock(err) {
+		switch iox.Classify(err) {
+		case iox.OutcomeMore:
+			return v
+		case iox.OutcomeWouldBlock:
+			bo.Wait()
+		default:
 			dispatchFailed(err)
 		}
-		bo.Wait()
 	}
 }
 
