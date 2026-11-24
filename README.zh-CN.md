@@ -1,5 +1,5 @@
 [![Go Reference](https://pkg.go.dev/badge/code.hybscloud.com/takt.svg)](https://pkg.go.dev/code.hybscloud.com/takt)
-[![Go Report Card](https://goreportcard.com/badge/github.com/hayabusa-cloud/takt)](https://goreportcard.com/report/github.com/hayabusa-cloud/takt)
+[![Benchmarks](https://github.com/hayabusa-cloud/takt/actions/workflows/benchmarks.yml/badge.svg)](https://github.com/hayabusa-cloud/takt/actions/workflows/benchmarks.yml)
 [![Coverage Status](https://codecov.io/gh/hayabusa-cloud/takt/graph/badge.svg)](https://codecov.io/gh/hayabusa-cloud/takt)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -307,6 +307,7 @@ defer boundedLoop.Drain()
 
 `Loop` 使用 `Backend`，`Exec` 和 `Advance` 使用 `Dispatcher`。它们是独立执行路径；Loop 不会自动调用 Dispatcher。`ExecError` 和 `AdvanceError` 显式解释应用错误效果。原始 Loop 需要后端或解释器处理所有已接纳的操作，包括错误效果。[可运行示例](example_test.go)展示了后继处理、立即返回结果和延后提交后端。
 
+[性能指南](docs/performance.md)涵盖局部性、调度、自适应退避、类型化分派和可重复的基准测试。
 
 ## 参考文献
 

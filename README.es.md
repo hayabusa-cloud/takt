@@ -1,5 +1,5 @@
 [![Go Reference](https://pkg.go.dev/badge/code.hybscloud.com/takt.svg)](https://pkg.go.dev/code.hybscloud.com/takt)
-[![Go Report Card](https://goreportcard.com/badge/github.com/hayabusa-cloud/takt)](https://goreportcard.com/report/github.com/hayabusa-cloud/takt)
+[![Benchmarks](https://github.com/hayabusa-cloud/takt/actions/workflows/benchmarks.yml/badge.svg)](https://github.com/hayabusa-cloud/takt/actions/workflows/benchmarks.yml)
 [![Coverage Status](https://codecov.io/gh/hayabusa-cloud/takt/graph/badge.svg)](https://codecov.io/gh/hayabusa-cloud/takt)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -307,6 +307,7 @@ defer boundedLoop.Drain()
 
 Use un `Backend` con `Loop`, o un `Dispatcher` con `Exec` y `Advance`. Son rutas separadas: Loop no llama automáticamente a Dispatcher. `ExecError` y `AdvanceError` interpretan explícitamente los efectos de error de aplicación. Un Loop sin esas capas necesita un backend/intérprete que maneje todas las operaciones admitidas, incluidos los efectos de error. Los [ejemplos ejecutables](example_test.go) muestran sucesoras, resultados inmediatos y admisión diferida al backend.
 
+La guía de [rendimiento](docs/performance.md) explica la localidad, la planificación, la espera adaptativa, el despacho tipado y las mediciones repetibles.
 
 ## Referencias
 

@@ -1,5 +1,5 @@
 [![Go Reference](https://pkg.go.dev/badge/code.hybscloud.com/takt.svg)](https://pkg.go.dev/code.hybscloud.com/takt)
-[![Go Report Card](https://goreportcard.com/badge/github.com/hayabusa-cloud/takt)](https://goreportcard.com/report/github.com/hayabusa-cloud/takt)
+[![Benchmarks](https://github.com/hayabusa-cloud/takt/actions/workflows/benchmarks.yml/badge.svg)](https://github.com/hayabusa-cloud/takt/actions/workflows/benchmarks.yml)
 [![Coverage Status](https://codecov.io/gh/hayabusa-cloud/takt/graph/badge.svg)](https://codecov.io/gh/hayabusa-cloud/takt)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -307,6 +307,7 @@ defer boundedLoop.Drain()
 
 `Loop` では `Backend`、`Exec` と `Advance` では `Dispatcher` を使います。これらは別の実行経路であり、Loop が自動的に Dispatcher を呼ぶわけではありません。`ExecError` と `AdvanceError` はアプリケーションのエラー効果を明示的に解釈します。素の Loop では、エラー効果を含むすべての受け入れ操作を扱えるバックエンドまたはインタプリタが必要です。[実行可能な例](example_test.go)では、後続サスペンション、即時の結果、バックエンドへの遅延送信を示します。
 
+[性能ガイド](docs/performance.md)では局所性、スケジューリング、適応的バックオフ、型付きディスパッチ、再現可能な測定方法を説明しています。
 
 ## 参考文献
 

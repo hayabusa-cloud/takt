@@ -1,5 +1,5 @@
 [![Go Reference](https://pkg.go.dev/badge/code.hybscloud.com/takt.svg)](https://pkg.go.dev/code.hybscloud.com/takt)
-[![Go Report Card](https://goreportcard.com/badge/github.com/hayabusa-cloud/takt)](https://goreportcard.com/report/github.com/hayabusa-cloud/takt)
+[![Benchmarks](https://github.com/hayabusa-cloud/takt/actions/workflows/benchmarks.yml/badge.svg)](https://github.com/hayabusa-cloud/takt/actions/workflows/benchmarks.yml)
 [![Coverage Status](https://codecov.io/gh/hayabusa-cloud/takt/graph/badge.svg)](https://codecov.io/gh/hayabusa-cloud/takt)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
@@ -305,6 +305,7 @@ defer boundedLoop.Drain()
 
 Use a `Backend` with `Loop`, or a `Dispatcher` with `Exec` and `Advance`. They are separate execution paths; a Loop does not invoke a Dispatcher automatically. `ExecError` and `AdvanceError` interpret application error effects explicitly. A raw Loop needs a backend/interpreter that handles every admitted operation, including any error effects. [Runnable examples](example_test.go) demonstrate successor handling, immediate results, and deferred backend admission.
 
+The [performance guide](docs/performance.md) covers locality, scheduling, backoff, typed dispatch and repeatable benchmarks.
 
 ## References
 

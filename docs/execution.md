@@ -29,7 +29,8 @@ Synchronous fatal disposal and `Drain` also cost O(capacity).
 Eligible replies retain positions in the current completion slab. There are at
 most as many replies as fetched entries, and the resumption budget consumes all
 of them before slab clearing or another backend poll. Retaining replies across
-rounds would require a different storage contract.
+rounds would require a different storage contract. See [performance](performance.md)
+for identity partitioning, queue addressing and cost measurement.
 
 An error from `Backend.Submit` means the backend accepted no work on that
 attempt. WouldBlock defers the request. Other submission errors abort the
