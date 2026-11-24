@@ -11,9 +11,9 @@ Moteur de dispatch abstrait, piloté par les événements de complétion, pour l
 
 ## Présentation
 
-Dans un modèle proactor, les opérations d'E/S sont soumises au noyau et leurs complétions arrivent de manière asynchrone. L'application doit corréler chaque complétion avec le calcul qui l'a demandée, reprendre ce calcul, puis traiter le succès, le progrès avec frontière vivante, la disponibilité/contre-pression sans progrès et l'échec.
+Dans le modèle proactor, un backend accepte les requêtes d'E/S et en signale la complétion de façon asynchrone. Lorsqu'une complétion correspond à une requête en cours et fournit une réponse valide, par exemple le nombre d'octets écrits, la boucle reprend le calcul en attente.
 
-`takt` fournit ce modèle d'exécution comme une couche abstraite au-dessus du système d'effets [kont](https://code.hybscloud.com/kont). Un `Dispatcher` évalue un effet algébrique à la fois et classe le résultat selon l'algèbre de résultats [iox](https://code.hybscloud.com/iox). Un `Backend` soumet les opérations à un moteur asynchrone, par exemple `io_uring`, et sonde les complétions. `Loop` les relie : il soumet les calculs, sonde le backend, corrèle les complétions par jeton et reprend les continuations suspendues.
+`takt` fournit ce modèle d'exécution comme une couche abstraite au-dessus du système d'effets [kont](https://code.hybscloud.com/kont). Un `Dispatcher` évalue un effet algébrique à la fois. `Advance` interprète le résultat selon l'algèbre de résultats [iox](https://code.hybscloud.com/iox). Un `Backend` soumet les opérations à un moteur asynchrone, par exemple `io_uring`, et sonde les complétions. `Loop` soumet les opérations au backend, le sonde, corrèle les complétions par jeton et reprend les continuations suspendues.
 
 Les programmes ont deux représentations : `kont.Eff` utilise des fermetures pour la composition, et `kont.Expr` expose des frames pour avancer par étapes. `Reify` et `Reflect` les relient. Les coûts d'allocation et d'exécution dépendent du programme et de sa réalisation ; aucune représentation ne garantit à elle seule un chemin critique moins coûteux.
 
@@ -68,12 +68,15 @@ func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
 
 ```go
 result := takt.Exec(d, computation) // kont.Eff
+```
+
+```go
 result := takt.ExecExpr(d, exprComputation) // kont.Expr
 ```
 
 ### Pas à pas
 
-Pour les boucles d'événements proactor, par exemple `io_uring`, `Step` et `Advance` évaluent un effet à la fois. Quand le dispatcher renvoie `iox.ErrWouldBlock`, la suspension est rendue à l'appelant, ce qui permet à la boucle d'événements de replanifier.
+`Step` évalue une expression jusqu'à ce qu'elle renvoie une valeur ou se suspende en attente de la réponse à une opération. `Advance` transmet directement cette opération au dispatcher. Si le dispatcher écrit des octets avant de renvoyer `iox.ErrWouldBlock`, il conserve la position d'écriture. L'appelant garde la même suspension pour réessayer.
 
 La loi de résultat du pas manuel est explicite : si `d.Dispatch(susp.Op())` renvoie `nil` ou `iox.ErrMore`, `Advance` reprend la suspension avec la valeur renvoyée et retourne la suspension suivante avec l'erreur originale ; si elle renvoie `iox.ErrWouldBlock` ou un échec ordinaire, `Advance` retourne le résultat zéro, la suspension originale et cette erreur. `ErrMore` est donc un signal de progrès dans le pas manuel, tandis que `ErrMore` au niveau complétion reste non pris en charge par le `Loop` générique parce que l'opération backend reste vivante.
 

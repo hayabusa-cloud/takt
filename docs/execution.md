@@ -2,11 +2,20 @@
 
 ## Dispatch
 
-`Advance` and `AdvanceSuspension` follow `iox.Classify`, including for wrapped
-errors. If a dispatch error matches both `iox.ErrWouldBlock` and `iox.ErrMore`,
-WouldBlock takes precedence. Stepping returns the original suspension and error.
-Blocking runners wait and retry. A dispatch classified as More permits one
-resumption with the supplied reply. The dispatcher accounts for any partial progress.
+`Step` evaluates a `kont.Expr` to a result or a suspension waiting for one
+operation's reply. A valid reply can resume that suspension once and may
+expose another operation. In the Proactor path, `Backend.Submit` returns a
+token on acceptance. `Loop.Poll` uses the token to deliver a reply reported
+by `Backend.Poll`. For a socket write, writability permits an attempt. The
+write completion reports its result, such as the number of bytes written.
+[Proactor pattern](https://www.dre.vanderbilt.edu/~schmidt/PDF/proactor.pdf)
+
+`Advance` and `AdvanceSuspension` call a `Dispatcher` directly. On `nil`
+or `iox.ErrMore`, they resume with the reply. On `iox.ErrWouldBlock` or an
+ordinary dispatch failure, they return the original suspension and error.
+On WouldBlock the dispatcher retains any partial work, and blocking runners
+wait and retry. Wrapped errors follow `iox.Classify`, with WouldBlock taking
+precedence when both sentinels match.
 
 ## One-shot computations
 
@@ -35,9 +44,10 @@ for identity partitioning, queue addressing and cost measurement.
 An error from `Backend.Submit` means the backend accepted no work on that
 attempt. WouldBlock defers the request. Other submission errors abort the
 local runner. The native binding retains accepted requests after a fault.
-A completion reporting an operation failure supplies a valid reply and
-resumes normally. If `Backend.Poll` returns any completions, its error must be
-nil. It can report a later service failure on a subsequent poll.
+For a matching completion that reports an operation failure, the backend
+encodes the failure in the reply supplied by `Completion.ResumeValue()`.
+If `Backend.Poll` returns any completions, its error must be nil. It can
+report a later service failure on a subsequent poll.
 
 `Completion.ResumeValue()` returns `Value` for an ordinary completion. For
 an inline completion, it invokes the `CompletionDecoder` on the two non-pointer
@@ -55,10 +65,7 @@ External drivers must combine it with native readiness, deadlines and cleanup
 obligations before parking. `Run` retries with `iox.Backoff` and resets it when
 a suspension resumes.
 
-The [write-session example](../write_session_example_test.go) combines writability
-and peer permission with `tempo.Both`. For events on the matching route,
-`cove.CheckSuspension` checks both before dispatch. A partial write retains its
-suspension and byte offset for the next permitted attempt.
+The write session tracks writability and peer permission with `tempo.Both`. On events for its route, it checks both with `cove.CheckSuspension` before dispatch. After a partial write, the caller keeps the suspension and the dispatcher saves the byte offset for the next permitted attempt. [Write-session example](../write_session_example_test.go)
 
 Use `Loop` when the conditions for delivering a reply stay valid through
 batch processing. On a batch fault, earlier valid replies can still resume.

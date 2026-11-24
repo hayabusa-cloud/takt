@@ -11,9 +11,9 @@ Motor de despacho abstracto, guiado por eventos de finalización, para pilas de 
 
 ## Descripción general
 
-En un modelo proactor, las operaciones de E/S se envían al kernel y sus finalizaciones llegan de forma asíncrona. La aplicación debe correlacionar cada finalización con la computación que la solicitó, reanudar esa computación y manejar éxito, progreso con una frontera viva, disponibilidad/contrapresión sin progreso y fallo.
+En el modelo proactor, el backend acepta solicitudes de E/S y notifica su finalización de forma asíncrona. Cuando una notificación corresponde a una solicitud pendiente y aporta una respuesta válida, como el número de bytes escritos, el bucle reanuda el cálculo que esperaba esa respuesta.
 
-`takt` proporciona este modelo de ejecución como una capa abstracta sobre el sistema de efectos [kont](https://code.hybscloud.com/kont). Un `Dispatcher` evalúa un efecto algebraico a la vez y clasifica el resultado según el álgebra de resultados [iox](https://code.hybscloud.com/iox). Un `Backend` envía operaciones a un motor asíncrono, por ejemplo `io_uring`, y sondea las finalizaciones. `Loop` los integra: envía computaciones, sondea el backend, correlaciona finalizaciones por token y reanuda las continuaciones suspendidas.
+`takt` proporciona este modelo de ejecución como una capa abstracta sobre el sistema de efectos [kont](https://code.hybscloud.com/kont). Un `Dispatcher` evalúa un efecto algebraico a la vez. `Advance` interpreta el resultado según el álgebra de resultados [iox](https://code.hybscloud.com/iox). Un `Backend` envía operaciones a un motor asíncrono, por ejemplo `io_uring`, y sondea las finalizaciones. `Loop` envía operaciones al backend, lo sondea, correlaciona finalizaciones por token y reanuda las continuaciones suspendidas.
 
 Los programas tienen dos representaciones: `kont.Eff` usa clausuras para la composición y `kont.Expr` expone marcos para avanzar por pasos. `Reify` y `Reflect` las conectan. El coste de asignación y ejecución depende del programa y su realización; la representación por sí sola no garantiza una ruta crítica más barata.
 
@@ -68,12 +68,15 @@ func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
 
 ```go
 result := takt.Exec(d, computation) // kont.Eff
+```
+
+```go
 result := takt.ExecExpr(d, exprComputation) // kont.Expr
 ```
 
 ### Paso a paso
 
-Para bucles de eventos proactor, por ejemplo `io_uring`, `Step` y `Advance` evalúan un efecto a la vez. Cuando el dispatcher devuelve `iox.ErrWouldBlock`, la suspensión se devuelve al llamador, permitiendo al bucle de eventos reprogramar.
+`Step` evalúa una expresión hasta que devuelve un valor o queda suspendida a la espera de la respuesta de una operación. `Advance` envía esa operación directamente al dispatcher. Si el dispatcher escribe algunos bytes antes de devolver `iox.ErrWouldBlock`, conserva la posición de escritura y el llamador conserva la misma suspensión para reintentar la operación.
 
 La ley de resultados del stepping manual es explícita: si `d.Dispatch(susp.Op())` devuelve `nil` o `iox.ErrMore`, `Advance` reanuda la suspensión con el valor devuelto y devuelve la siguiente suspensión junto con el error original; si devuelve `iox.ErrWouldBlock` o un fallo ordinario, `Advance` devuelve el resultado cero, la suspensión original y ese error. `ErrMore` es por tanto una señal de progreso en stepping manual, mientras que `ErrMore` a nivel de finalización sigue sin estar soportado por el `Loop` genérico porque la operación de backend continúa viva.
 

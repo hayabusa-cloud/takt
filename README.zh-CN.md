@@ -11,9 +11,9 @@
 
 ## 概述
 
-在 proactor 模型中，I/O 操作会提交给内核，其完成事件随后异步到达。应用程序必须把每个完成事件重新关联到发起它的计算，恢复该计算，并处理成功、带存活前沿的进展、无进展的就绪/背压以及失败。
+在 Proactor 模型中，后端接受 I/O 请求，并异步报告完成事件。当完成事件与待处理的请求匹配，并带有有效应答（例如已写入的字节数）时，事件循环就恢复等待该应答的计算。
 
-`takt` 将这一执行模型作为 [kont](https://code.hybscloud.com/kont) 效果系统之上的抽象层提供。`Dispatcher` 一次求值一个代数效果，并依据 [iox](https://code.hybscloud.com/iox) 的结果代数对结果进行分类。`Backend` 将操作提交到异步引擎，例如 `io_uring`，并轮询完成事件。`Loop` 将这些部分串联起来：提交计算、轮询后端、通过令牌关联完成事件，并恢复挂起的续延。
+`takt` 将这一执行模型作为 [kont](https://code.hybscloud.com/kont) 效果系统之上的抽象层提供。`Dispatcher` 一次求值一个代数效果。`Advance` 依据 [iox](https://code.hybscloud.com/iox) 的结果代数对结果进行分类。`Backend` 将操作提交到异步引擎，例如 `io_uring`，并轮询完成事件。`Loop` 向后端提交操作、轮询后端、通过令牌关联完成事件，并恢复挂起的续延。
 
 程序有两种表示：`kont.Eff` 使用闭包进行组合，`kont.Expr` 暴露用于逐步执行的帧，二者通过 `Reify` 和 `Reflect` 转换。分配和执行成本取决于程序及其实现；仅选择一种表示并不能保证热路径成本更低。
 
@@ -68,12 +68,15 @@ func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
 
 ```go
 result := takt.Exec(d, computation) // kont.Eff
+```
+
+```go
 result := takt.ExecExpr(d, exprComputation) // kont.Expr
 ```
 
 ### 步进
 
-对于 proactor 事件循环，例如 `io_uring`，`Step` 和 `Advance` 每次只求值一个效果。当调度器返回 `iox.ErrWouldBlock` 时，挂起会返回给调用方，以便事件循环稍后重新调度。
+`Step` 对表达式求值，直到它返回一个值或挂起等待某个操作的应答。`Advance` 将这个操作直接交给调度器。如果调度器写入部分数据后返回 `iox.ErrWouldBlock`，它会保存写入偏移量，调用方则保留同一个挂起对象以便重试。
 
 手动步进的结果规则是显式的：如果 `d.Dispatch(susp.Op())` 返回 `nil` 或 `iox.ErrMore`，`Advance` 会用返回值恢复挂起，并返回后继挂起以及原始 error；如果返回 `iox.ErrWouldBlock` 或普通失败，`Advance` 返回零值结果、原始挂起和该 error。`ErrMore` 因此是手动步进中的进展信号；而完成事件层的 `ErrMore` 仍然不被通用 `Loop` 支持，因为后端操作仍然存活。
 

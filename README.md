@@ -11,9 +11,9 @@ An abstract completion-driven dispatch engine for non-blocking I/O stacks.
 
 ## Overview
 
-In a proactor model, I/O operations are submitted to the kernel and their completions arrive asynchronously. The application must correlate each completion back to the computation that requested it, resume that computation, and handle success, progress with a live frontier, no-progress readiness/backpressure, and failure.
+In the proactor model, a backend accepts I/O requests and reports completions asynchronously. When a completion matches an outstanding request and supplies a valid reply, such as the number of bytes written, the loop resumes the waiting computation.
 
-`takt` provides this execution model as an abstract layer over the [kont](https://code.hybscloud.com/kont) effect system. A `Dispatcher` evaluates one algebraic effect at a time, classifying the result according to the [iox](https://code.hybscloud.com/iox) outcome algebra. A `Backend` submits operations to an asynchronous engine, for example `io_uring`, and polls for completions. The `Loop` ties them together: it submits computations, polls the backend, correlates completions by token, and resumes suspended continuations.
+`takt` provides this execution model as an abstract layer over the [kont](https://code.hybscloud.com/kont) effect system. A `Dispatcher` evaluates one algebraic effect at a time. `Advance` interprets its result according to the [iox](https://code.hybscloud.com/iox) outcome algebra. A `Backend` submits operations to an asynchronous engine, for example `io_uring`, and polls for completions. `Loop` submits operations to the backend, polls it, correlates completions by token, and resumes suspended continuations.
 
 Programs have two representations: `kont.Eff` uses closures for composition; `kont.Expr` exposes frames for stepping. `Reify` and `Reflect` connect them. Allocation and execution costs depend on the program and realization; neither representation alone guarantees a cheaper hot path.
 
@@ -68,12 +68,15 @@ func (d *myDispatcher) Dispatch(op kont.Operation) (kont.Resumed, error) {
 
 ```go
 result := takt.Exec(d, computation) // kont.Eff
+```
+
+```go
 result := takt.ExecExpr(d, exprComputation) // kont.Expr
 ```
 
 ### Stepping
 
-For proactor event loops, for example `io_uring`, `Step` and `Advance` evaluate one effect at a time. When the dispatcher yields `iox.ErrWouldBlock`, the suspension is returned to the caller so the event loop can reschedule it.
+`Step` evaluates an expression until it returns a value or suspends on an operation. `Advance` dispatches that operation directly. If the dispatcher writes some bytes before returning `iox.ErrWouldBlock`, it keeps the byte offset and the caller retains the same suspension for retry.
 
 The manual stepping outcome law is explicit: if `d.Dispatch(susp.Op())` returns `nil` or `iox.ErrMore`, `Advance` resumes the suspension with the returned value and returns the next suspension plus the original error; if it returns `iox.ErrWouldBlock` or an ordinary failure, `Advance` returns the zero result, the original suspension, and that error. `ErrMore` is therefore a progress signal in manual stepping, while completion-level `ErrMore` remains unsupported by generic `Loop` because the backend operation is still live.
 
